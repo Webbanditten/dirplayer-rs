@@ -91,10 +91,18 @@ function proxyAsset(req, res, assetPath) {
         const rewritten = body.replace(/https?:\/\/images\.habbo-danmark\.com\//g, `http://127.0.0.1:${PORT}/assets/`);
         // DROP_VARS=cast.entry.27,... removes variables (for experiments, e.g. freeing a cast slot).
         const drop = (process.env.DROP_VARS || '').split(',').filter(Boolean);
-        const filtered = drop.length ? rewritten.split(/\r?\n/).filter(l => !drop.some(d => l.startsWith(d + '='))).join('\n') : rewritten;
+        let lines = rewritten.split(/\r?\n/).filter(l => !drop.some(d => l.startsWith(d + '=')));
+        // SET_VARS=<file>: `key=value` lines that replace the variable, or are appended when it is missing
+        // (to try an external_vars.php change before making it on prod).
+        const set = process.env.SET_VARS ? fs.readFileSync(process.env.SET_VARS, 'latin1').split(/\r?\n/).filter(l => l.includes('=') && !l.startsWith('#')) : [];
+        for (const s of set) {
+          const key = s.slice(0, s.indexOf('=') + 1);
+          const i = lines.findIndex(l => l.startsWith(key));
+          if (i >= 0) lines[i] = s; else lines.push(s);
+        }
         res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store' });
-        res.end(Buffer.from(filtered, 'latin1'));
-        log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten${drop.length ? ', dropped ' + drop.join(',') : ''})`);
+        res.end(Buffer.from(lines.join('\n'), 'latin1'));
+        log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten${drop.length ? ', dropped ' + drop.join(',') : ''}${set.length ? ', set ' + set.map(s => s.split('=')[0]).join(',') : ''})`);
       });
       return;
     }
