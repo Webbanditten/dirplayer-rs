@@ -85,6 +85,16 @@ function page(sso, forward, large) {
 
 function proxyAsset(req, res, assetPath) {
   const target = new URL(ASSETS + assetPath);
+  // LOCAL_ASSETS=<dir>: serve a file from that folder instead when its name matches the requested one
+  // (try a rebuilt cast before uploading it).
+  if (process.env.LOCAL_ASSETS) {
+    const local = path.join(process.env.LOCAL_ASSETS, path.basename(target.pathname));
+    if (path.basename(target.pathname) && fs.existsSync(local) && fs.statSync(local).isFile()) {
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+      log('local', target.pathname);
+      return fs.createReadStream(local).pipe(res);
+    }
+  }
   const isVars = /\/gamedata\/external_variables\.txt$/.test(target.pathname);
   const upstream = https.request(target, { method: 'GET', headers: { 'user-agent': 'habbo-dirplayer-dev', accept: '*/*' } }, up => {
     if (isVars && up.statusCode === 200) {

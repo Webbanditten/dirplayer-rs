@@ -42,6 +42,8 @@ Debug switches (env):
 - `DROP_VARS=cast.entry.27,…`: remove lines from `external_variables.txt` (experiments, e.g. freeing a cast slot).
 - `SET_VARS=<file>`: `key=value` lines that replace (or add) variables in `external_variables.txt`, to try an
   `external_vars.php` change before making it on prod.
+- `LOCAL_ASSETS=<dir>`: serve a file from that folder instead of prod when its name matches the requested asset (try a
+  rebuilt cast, e.g. `hh_room_private_wc.cct`, before uploading it).
 
 ## Status (2026-11-16)
 - Hotel view, SSO login, navigator, entering a room, room rendering and chat work.
