@@ -4280,7 +4280,8 @@ fn sprite_set_prop_is_noop(
                 Ok(sprite.height == height && sprite.has_size_changed)
             }
             Some(BuiltInSymbol::Ink) => Ok(sprite.ink == value.int_value()?),
-            Some(BuiltInSymbol::Blend) => Ok(sprite.blend == value.int_value()?),
+            // Not a plain number (e.g. a list): not "unchanged"; the setter decides.
+            Some(BuiltInSymbol::Blend) => Ok(value.int_value().map_or(false, |v| sprite.blend == v)),
             Some(BuiltInSymbol::Rotation) => {
                 let rotation = if value.is_number() {
                     value.to_float()?
@@ -4738,7 +4739,16 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
         ),
         Some(BuiltInSymbol::Blend) => borrow_sprite_mut(
             sprite_id,
-            |player| value.int_value(),
+            // A list sets the blend to its first number (an empty list to 0). Habbo's
+            // sf_wall2.props has `#blend: [0]`; Shockwave takes it, and the "list to int"
+            // error here aborted the furni (and froze the room "Lager").
+            |player| match value {
+                Datum::List(_, items, _) => items
+                    .front()
+                    .map(|item| player.get_datum(item).int_value())
+                    .unwrap_or(Ok(0)),
+                _ => value.int_value(),
+            },
             |sprite, value| {
                 sprite.blend = value?;
                 sprite.has_blend_mod = true;
