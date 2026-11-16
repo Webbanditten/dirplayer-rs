@@ -862,6 +862,35 @@ impl Bitmap {
         if alpha == 0.0 {
             return;
         }
+        // Opaque fill of an indexed image: every pixel gets the same index, so
+        // find it once and write it everywhere. set_pixel on an 8-bit image
+        // scans the whole palette for each pixel; Habbo's wall mask manager
+        // fills a 720x540 8-bit image for every window furni it registers, and
+        // that alone took ~350 ms per fill, freezing rooms with many windows
+        // ("Guldminen", 21 windows: 21 fills during room load, ~7 s).
+        if alpha == 1.0 && self.bit_depth <= 8 {
+            let (cx1, cy1) = (x1.max(0), y1.max(0));
+            let (cx2, cy2) = (x2.min(self.width as i32), y2.min(self.height as i32));
+            if cx1 >= cx2 || cy1 >= cy2 {
+                return;
+            }
+            self.set_pixel(cx1, cy1, color, palettes);
+            if let ColorRef::PaletteIndex(idx) = self.get_pixel_color_ref(cx1 as u16, cy1 as u16) {
+                if self.bit_depth == 8 {
+                    let w = self.width as usize;
+                    for y in cy1 as usize..cy2 as usize {
+                        self.data[y * w + cx1 as usize..y * w + cx2 as usize].fill(idx);
+                    }
+                } else {
+                    for y in cy1..cy2 {
+                        for x in cx1..cx2 {
+                            self.set_pixel_index(x, y, idx);
+                        }
+                    }
+                }
+                return;
+            }
+        }
         for y in y1..y2 {
             for x in x1..x2 {
                 let blended_color = if alpha == 1.0 {
