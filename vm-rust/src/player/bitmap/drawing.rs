@@ -2949,6 +2949,15 @@ impl Bitmap {
                         continue; // transparent - RGB matches background color
                     }
 
+                    // Director tints before it keys: with an explicit `#bgColor` white becomes
+                    // that colour and drops out with it. Habbo draws avatar eyes ("ey") with
+                    // ink 36; after a figure change (changePartData) their bgColor is the eye
+                    // colour, and keyed on the raw pixel the eye image's white background was
+                    // copied into the avatar, which its ink 36 sprite then showed as a hole.
+                    if (r, g, b) == (255, 255, 255) && params.bg_color_explicit && ink == 36 {
+                        continue;
+                    }
+
                     // If alpha channel disabled → fully opaque
                     let src_alpha = 1.0;
 
@@ -3014,6 +3023,12 @@ impl Bitmap {
 
                     // Skip pixel if it matches the sprite's bgColor (transparent background)
                     if (r, g, b) == bg_color_resolved {
+                        continue;
+                    }
+
+                    // copyPixels with an explicit `#bgColor`: white is tinted to it and keyed
+                    // (see the indexed ink 36 path).
+                    if (r, g, b) == (255, 255, 255) && params.bg_color_explicit && ink == 36 {
                         continue;
                     }
 
