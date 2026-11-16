@@ -23,9 +23,11 @@ What the harness does:
 - Proxies `/assets/*` to `https://images.habbo-danmark.com`. Assets are same-origin and nothing is mirrored
   locally. `external_variables.txt` gets its asset URLs rewritten to the proxy.
 - Bridges `ws://…/ws/game` and `/ws/mus` to Odin's TCP ports, through `DirPlayer.configureFlash({ socketProxy })`.
-  This is temporary, until Odin has a native WebSocket listener.
+  With `NATIVE_WS` set the page talks to Odin's own WebSocket listener instead.
 
-Env overrides: `PORT`, `ASSETS`, `GAME_HOST`, `GAME_PORT`, `MUS_PORT`, `SITE_URL`.
+Env overrides: `PORT`, `ASSETS`, `GAME_HOST`, `GAME_PORT`, `MUS_PORT`, `SITE_URL`, and `NATIVE_WS` (for example
+`ws://127.0.0.1:12323`): connect straight to Odin's WebSocket listener (`ws.port` in `server.ini`, paths `/game`
+and `/mus`) instead of the harness's WS→TCP bridges.
 
 Page params:
 - `?sso=<ticket>`: the SSO ticket (`sw6`).
@@ -54,4 +56,7 @@ Debug switches (env):
   - Assigning `ancestor` on an instance whose script doesn't declare `property ancestor` now delegates down
     the existing chain instead of replacing it. Without that the gamesystem modules lose their ID, the
     SnowStorm turn manager never gets `update` calls, and nobody can walk.
+  - Multiuser: a dropped `xtra("Multiuser")` instance now closes its socket, as Director's finalizer does.
+    The client's SSO login connects twice and replaces the first instance; its socket used to stay open until
+    the server timed it out. `breakConnection` now really closes the socket as well.
 - The polyfill is about 15 MB (6.9 MB gzipped) because the WASM is embedded.

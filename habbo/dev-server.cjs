@@ -14,7 +14,8 @@
  *                              WebSocket itself
  *
  * Env: PORT (8090), ASSETS (https://images.habbo-danmark.com), GAME_HOST (127.0.0.1), GAME_PORT (12321),
- *      MUS_PORT (12322), SITE_URL (http://localhost:5080, the local CMS).
+ *      MUS_PORT (12322), SITE_URL (http://localhost:5080, the local CMS), NATIVE_WS (Odin's WebSocket
+ *      listener, e.g. ws://127.0.0.1:12323; default: the built-in WS->TCP bridges).
  */
 const http = require('http');
 const https = require('https');
@@ -29,6 +30,9 @@ const ASSETS = (process.env.ASSETS || 'https://images.habbo-danmark.com').replac
 const GAME_HOST = process.env.GAME_HOST || '127.0.0.1';
 const GAME_PORT = parseInt(process.env.GAME_PORT || '12321', 10);
 const MUS_PORT = parseInt(process.env.MUS_PORT || '12322', 10);
+// NATIVE_WS=ws://127.0.0.1:12323: connect straight to Odin's WebSocket listener (ws.port) instead of this
+// server's WS->TCP bridges.
+const NATIVE_WS = (process.env.NATIVE_WS || '').replace(/\/$/, '');
 const SITE_URL = (process.env.SITE_URL || 'http://localhost:5080').replace(/\/$/, '');
 const POLYFILL = path.join(__dirname, '..', 'dist-polyfill', 'dirplayer-polyfill.js');
 
@@ -66,8 +70,8 @@ function page(sso, forward) {
   DirPlayer.configureFlash({
     disableFlash: true,
     socketProxy: [
-      { host: ${JSON.stringify(GAME_HOST)}, port: ${GAME_PORT}, proxyUrl: 'ws://' + location.host + '/ws/game' },
-      { host: ${JSON.stringify(GAME_HOST)}, port: ${MUS_PORT}, proxyUrl: 'ws://' + location.host + '/ws/mus' },
+      { host: ${JSON.stringify(GAME_HOST)}, port: ${GAME_PORT}, proxyUrl: ${NATIVE_WS ? JSON.stringify(NATIVE_WS + '/game') : "'ws://' + location.host + '/ws/game'"} },
+      { host: ${JSON.stringify(GAME_HOST)}, port: ${MUS_PORT}, proxyUrl: ${NATIVE_WS ? JSON.stringify(NATIVE_WS + '/mus') : "'ws://' + location.host + '/ws/mus'"} },
     ],
   });
   window.addEventListener('DOMContentLoaded', () => DirPlayer.init());
