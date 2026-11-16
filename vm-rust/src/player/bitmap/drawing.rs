@@ -3017,6 +3017,15 @@ impl Bitmap {
                         continue;
                     }
 
+                    // A sprite with both foreColor and bgColor set tints white to bgColor
+                    // before the key, so white drops out too (as in the WebGL2 renderer).
+                    // Habbo's window text: white-backed image, foreColor white, bgColor black.
+                    if (r, g, b) == (255, 255, 255)
+                        && params.sprite.map_or(false, |s| s.has_fore_color && s.has_back_color)
+                    {
+                        continue;
+                    }
+
                     // Colorize foreground (black/dark) pixels with the sprite's foreColor
                     let src_color = if (r, g, b) == (0, 0, 0) {
                         fg_color_resolved

@@ -5420,6 +5420,21 @@ impl WebGL2Renderer {
                     (r, g, b)
                 };
 
+                // Ink 36 keys the colorized pixel, as ink 33/35 do above: Director tints
+                // first (white -> bgColor), then drops bgColor. Habbo's window text
+                // elements draw a white-backed text image through a sprite with
+                // foreColor white, bgColor black and ink 36 ("Kun baggrund" in the room
+                // dimmer); keyed on the raw white texel, the background became a black box.
+                let a = if should_use_colorkey_ink36
+                    && a > 0
+                    && (has_fore || has_back)
+                    && Some((final_r, final_g, final_b)) == sprite_bg_color
+                {
+                    0
+                } else {
+                    a
+                };
+
                 if a > 0 {
                     opaque_count += 1;
                 } else {
