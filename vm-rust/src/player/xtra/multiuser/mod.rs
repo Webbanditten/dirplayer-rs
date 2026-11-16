@@ -104,6 +104,34 @@ impl MultiuserXtraInstance {
     }
 }
 
+/// Director destroys an xtra instance when the last reference to it goes away, which closes its connection.
+/// DirPlayer has no such finalizer, so a dropped instance would keep its socket open. Habbo's fuse client hits
+/// this on every SSO login: `Login Component.initB` calls `openConnection` twice, and the second
+/// `Connection Instance.connect` replaces `pXtra` with a new `xtra("Multiuser")` instance; the first socket
+/// then sat idle until the server timed it out. Called when an instance connects: any other connected
+/// instance that no live datum refers to any more is removed, which drops its sender and closes its socket.
+fn release_unreferenced_connections(keep: u32) {
+    let referenced: fxhash::FxHashSet<u32> = reserve_player_ref(|player| {
+        player
+            .allocator
+            .datums
+            .iter()
+            .filter_map(|(_, entry)| match &entry.datum {
+                Datum::XtraInstance(name, id) if name.eq_ignore_ascii_case("multiuser") => Some(*id),
+                _ => None,
+            })
+            .collect()
+    });
+    let Some(manager) = (unsafe { MULTIUSER_XTRA_MANAGER_OPT.as_mut() }) else { return };
+    manager.instances.retain(|id, instance| {
+        let release = *id != keep && instance.socket_tx.is_some() && !referenced.contains(id);
+        if release {
+            multiuser_log!("Multiuser: closing connection of instance {} (no longer referenced)", id);
+        }
+        !release
+    });
+}
+
 pub struct MultiuserXtraManager {
     pub instances: FxHashMap<u32, MultiuserXtraInstance>,
     pub instance_counter: u32,
@@ -167,6 +195,7 @@ impl MultiuserXtraManager {
                 })
             }
             "connecttonetserver" => {
+                release_unreferenced_connections(instance_id);
                 let mut multiusr_manager = unsafe { MULTIUSER_XTRA_MANAGER_OPT.as_mut().unwrap() };
                 let instance = multiusr_manager.instances.get_mut(&instance_id).unwrap();
                 if let Some((handler_obj_ref, handler_symbol)) = &instance.net_message_handler {
@@ -488,6 +517,9 @@ impl MultiuserXtraManager {
                             multiuser_log!("Multiuser: Failed to send message: {:?}", e);
                         }
                     }
+                    // The sender was dropped (breakConnection, or the instance was released):
+                    // close the socket. The browser keeps an open WebSocket alive on its own.
+                    let _ = socket_clone.close();
                 });
 
                 // Forget the callbacks to keep them alive
