@@ -5341,16 +5341,25 @@ impl WebGL2Renderer {
                                         (r, g, b)
                                     }
                                 } else {
-                                    // General indexed colorize
-                                    let max = (1u16 << bitmap.original_bit_depth) - 1;
-                                    let t = i as f32 / max as f32;
-
+                                    // General indexed colorize. Director maps black to the
+                                    // foreColor and white to the backColor, blending each
+                                    // channel by the pixel's own palette colour:
+                                    // out.c = mix(fg.c, bg.c, src.c). The palette index is
+                                    // not a brightness: it only works where index 0 is black
+                                    // (systemWin). On #systemMac bitmaps (Habbo's post-its:
+                                    // white 0, greys 245-254, black 255) an index ramp painted
+                                    // the black outline in the bgColor and dark-tinted the
+                                    // coloured pixels, so notes came out as flat yellow blobs.
                                     if (has_fore || has_back) && use_back_color {
-                                        // Interpolate between fg and bg based on palette index
+                                        let eff_fg = if has_fore { fg_rgb } else { (0u8, 0u8, 0u8) };
+                                        let eff_bg = if has_back { bg_rgb } else { (255u8, 255u8, 255u8) };
+                                        let mix = |lo: u8, hi: u8, s: u8| -> u8 {
+                                            ((lo as u16 * (255 - s as u16) + hi as u16 * s as u16) / 255) as u8
+                                        };
                                         (
-                                            ((1.0 - t) * fg_rgb.0 as f32 + t * bg_rgb.0 as f32) as u8,
-                                            ((1.0 - t) * fg_rgb.1 as f32 + t * bg_rgb.1 as f32) as u8,
-                                            ((1.0 - t) * fg_rgb.2 as f32 + t * bg_rgb.2 as f32) as u8,
+                                            mix(eff_fg.0, eff_bg.0, r),
+                                            mix(eff_fg.1, eff_bg.1, g),
+                                            mix(eff_fg.2, eff_bg.2, b),
                                         )
                                     } else if has_fore && i == 0 {
                                         // Replace palette index 0 with fg color
