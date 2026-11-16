@@ -2184,8 +2184,14 @@ impl Bitmap {
         }
     }
 
+    /// Same table as the WebGL2 renderer's `use_back_color`: the backColor takes part in colorize for 32-bit
+    /// ink 0 and for indexed bitmaps under ink 0, 8 (matte) and 9 (mask). Habbo's post-its are 8-bit, ink 8.
     fn uses_back_color(depth: u8, ink: u32) -> bool {
-        ink == 0 && (depth == 32 || depth <= 8)
+        match (depth, ink) {
+            (32, 0) => true,
+            (d, 0) | (d, 8) | (d, 9) if d <= 8 => true,
+            _ => false,
+        }
     }
 
     /// Copy pixels from src to self, respecting scaling, flipping, masks, blending, and rotation
@@ -3128,8 +3134,20 @@ impl Bitmap {
                     // foreColor so the gray pattern reads as a darker shade of
                     // the wall colour, not as a desaturating gray smear.
                     let sprite_fg = params.sprite.map_or(false, |sp| sp.has_fore_color);
+                    let sprite_bg = params.sprite.map_or(false, |sp| sp.has_back_color);
                     let has_fg = sprite_fg || params.fore_color_explicit;
-                    if has_fg && fg_color_resolved != (0, 0, 0) {
+                    if params.sprite.is_some() && (sprite_fg || sprite_bg) {
+                        // Sprites (the CPU renderer) colorize like the WebGL2 renderer: black takes
+                        // the foreColor, white the backColor, per channel by the pixel's colour.
+                        // Habbo's post-its are ink 8 with bgColor = the note colour; without the
+                        // backColor they rendered white.
+                        let eff_fg = if sprite_fg { fg_color_resolved } else { (0u8, 0u8, 0u8) };
+                        let eff_bg = if sprite_bg { bg_color_resolved } else { (255u8, 255u8, 255u8) };
+                        let mix = |lo: u8, hi: u8, s: u8| -> u8 {
+                            ((lo as u16 * (255 - s as u16) + hi as u16 * s as u16) / 255) as u8
+                        };
+                        src_color = (mix(eff_fg.0, eff_bg.0, sr), mix(eff_fg.1, eff_bg.1, sg), mix(eff_fg.2, eff_bg.2, sb));
+                    } else if has_fg && fg_color_resolved != (0, 0, 0) {
                         src_color = Self::apply_forecolor_tint(src_color, fg_color_resolved);
                     }
 
@@ -3314,21 +3332,39 @@ impl Bitmap {
 
                         // ---------- INDEXED (≤8-bit) ----------
                         _ => {
-                            // Palette index based semantics
                             let color_ref = src.get_pixel_color_ref(sx, sy);
 
                             if let ColorRef::PaletteIndex(i) = color_ref {
-                                let max = (1 << src.original_bit_depth) - 1;
-                                let t = i as f32 / max as f32;
-
-                                if has_fg && has_bg && Self::uses_back_color(src.original_bit_depth, ink) {
+                                // Director maps black to the foreColor and white to the backColor,
+                                // blending each channel by the pixel's own palette colour:
+                                // out.c = mix(fg.c, bg.c, src.c), as the WebGL2 renderer does. The
+                                // palette index is not a brightness: on #systemMac (index 0 white,
+                                // 255 black) an index ramp ran backwards, and with only ink 0
+                                // allowed the backColor, Habbo's post-its (ink 8, bgColor = note
+                                // colour) stayed white. Only for sprites (the CPU renderer), like the
+                                // WebGL2 rule; Lingo copyPixels keeps its previous behaviour.
+                                if params.sprite.is_some()
+                                    && (has_fg || has_bg)
+                                    && Self::uses_back_color(src.original_bit_depth, ink)
+                                {
+                                    let eff_fg = if has_fg { fg_color_resolved } else { (0u8, 0u8, 0u8) };
+                                    let eff_bg = if has_bg { bg_color_resolved } else { (255u8, 255u8, 255u8) };
+                                    let mix = |lo: u8, hi: u8, s: u8| -> u8 {
+                                        ((lo as u16 * (255 - s as u16) + hi as u16 * s as u16) / 255) as u8
+                                    };
+                                    src_color = (mix(eff_fg.0, eff_bg.0, sr), mix(eff_fg.1, eff_bg.1, sg), mix(eff_fg.2, eff_bg.2, sb));
+                                } else if params.sprite.is_none()
+                                    && has_fg
+                                    && has_bg
+                                    && ink == 0
+                                {
+                                    // Lingo copyPixels: unchanged palette-index ramp (ink 0 only).
+                                    let max = (1 << src.original_bit_depth) - 1;
+                                    let t = i as f32 / max as f32;
                                     src_color = (
-                                        ((1.0 - t) * fg_color_resolved.0 as f32
-                                            + t * bg_color_resolved.0 as f32) as u8,
-                                        ((1.0 - t) * fg_color_resolved.1 as f32
-                                            + t * bg_color_resolved.1 as f32) as u8,
-                                        ((1.0 - t) * fg_color_resolved.2 as f32
-                                            + t * bg_color_resolved.2 as f32) as u8,
+                                        ((1.0 - t) * fg_color_resolved.0 as f32 + t * bg_color_resolved.0 as f32) as u8,
+                                        ((1.0 - t) * fg_color_resolved.1 as f32 + t * bg_color_resolved.1 as f32) as u8,
+                                        ((1.0 - t) * fg_color_resolved.2 as f32 + t * bg_color_resolved.2 as f32) as u8,
                                     );
                                 } else if has_fg && i == 0 {
                                     src_color = fg_color_resolved;
@@ -3422,6 +3458,20 @@ impl Bitmap {
                     && (sr, sg, sb) == bg_color_resolved
                 {
                     continue; // This pixel is background → transparent
+                }
+
+                // Add Pin / Sub Pin on sprites: the bitmap's white background is transparent even
+                // with a coloured bgColor, as in the WebGL2 renderer. Director colorizes an indexed
+                // bitmap first (white -> bgColor) and then keys the bgColor; comparing the raw white
+                // against a coloured bgColor drew it additively instead. Habbo sets the furni part
+                // colour as bgColor on the ink-33 loading placeholder, which showed a white square.
+                if (ink == 33 || ink == 35)
+                    && params.sprite.is_some()
+                    && !params.is_text_rendering
+                    && !src.use_alpha
+                    && (sr, sg, sb) == (255, 255, 255)
+                {
+                    continue;
                 }
 
                 // ----------------------------------------------------------
