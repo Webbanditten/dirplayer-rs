@@ -5,6 +5,7 @@
  *   node habbo/dev-server.cjs            # http://127.0.0.1:8090/?sso=<ticket>
  *
  * - GET /                      test page: the CMS client page's <embed> + dirplayer-polyfill.js
+ *                                (?large=1: the CMS 2x client, a 1440x1080 embed with dynamicResolution=1)
  * - GET /dirplayer-polyfill.js the local build (npm run build-polyfill)
  * - GET /assets/*              reverse proxy to https://images.habbo-danmark.com/* (same-origin: no CORS,
  *                              no mixed content, nothing mirrored locally)
@@ -38,7 +39,7 @@ const POLYFILL = path.join(__dirname, '..', 'dist-polyfill', 'dirplayer-polyfill
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 23), ...a);
 
-function page(sso, forward) {
+function page(sso, forward, large) {
   const self = `http://127.0.0.1:${PORT}`;
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // Same params as OdinCMS Views/Client/Index.cshtml. The game/MUS host+port stay what the client is told;
@@ -77,8 +78,8 @@ function page(sso, forward) {
   window.addEventListener('DOMContentLoaded', () => DirPlayer.init());
 </script></head>
 <body><div id="bar">DirPlayer dev harness · SSO ${sso ? 'set' : '<b>missing (?sso=)</b>'} · assets via ${esc(ASSETS)}</div>
-<embed src="/assets/dcr/latest/habbo.dcr" bgColor="#000000" width="720" height="540" type="application/x-director"
-         ${attrs}>
+<embed src="/assets/dcr/latest/habbo.dcr" bgColor="#000000" width="${large ? 1440 : 720}" height="${large ? 1080 : 540}" type="application/x-director"
+         ${attrs}${large ? ' dynamicResolution="1"' : ''}>
 </body></html>`;
 }
 
@@ -125,7 +126,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(page(url.searchParams.get('sso') || '', url.searchParams.get('forward')));
+    return res.end(page(url.searchParams.get('sso') || '', url.searchParams.get('forward'), url.searchParams.get('large') === '1'));
   }
   if (url.pathname === '/dirplayer-polyfill.js') {
     if (!fs.existsSync(POLYFILL)) { res.writeHead(404); return res.end('run npm run build-polyfill'); }

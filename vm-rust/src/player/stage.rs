@@ -173,6 +173,19 @@ pub fn apply_stage_draw_rect(player: &DirPlayer) {
     });
 }
 
+/// Movie-space point to canvas pixels: the mapping `get_concrete_sprite_render_rect`
+/// applies to sprite rects. Renderers that work in canvas pixels must map a
+/// sprite's loc (its rotation and skew pivot) the same way, or a transformed
+/// sprite turns around the wrong point once drawRect scales the movie.
+pub fn movie_to_canvas_point(player: &DirPlayer, x: f64, y: f64) -> (f64, f64) {
+    let (sx, sy) = stage_scale(player);
+    if (sx - 1.0).abs() < 1e-6 && (sy - 1.0).abs() < 1e-6 {
+        return (x, y);
+    }
+    let layout = stage_layout(player);
+    (layout.draw_rect[0] + x * sx, layout.draw_rect[1] + y * sy)
+}
+
 /// Convert host-canvas pixel coords to movie-space coords, inverting the
 /// drawRect scaling so Lingo's mouseH/mouseV and script-facing APIs see the
 /// authored coordinate system.

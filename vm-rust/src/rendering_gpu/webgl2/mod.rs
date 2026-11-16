@@ -1558,7 +1558,10 @@ impl WebGL2Renderer {
                 // inside the stage (Grunge Madras in Gyden lost its last part).
                 // Cull those on a box around the loc that covers any rotation.
                 let (left, top, right, bottom) = if sprite.rotation != 0.0 || sprite.skew != 0.0 {
-                    let (cx, cy) = (sprite.loc_h as f64, sprite.loc_v as f64);
+                    // `rect` is in canvas pixels (drawRect-scaled), so the loc must be too.
+                    let (cx, cy) = crate::player::stage::movie_to_canvas_point(
+                        player, sprite.loc_h as f64, sprite.loc_v as f64,
+                    );
                     let r = [
                         (rect.left as f64, rect.top as f64),
                         (rect.right as f64, rect.top as f64),
@@ -1616,7 +1619,15 @@ impl WebGL2Renderer {
                 sprite.has_fore_color,
                 sprite.has_back_color,
                 sprite.puppet,
-                (sprite.loc_h, sprite.loc_v),
+                // In canvas pixels like `rect`: it is the rotation and skew pivot.
+                // Left in movie space, a 2x drawRect (Habbo's large client) mirrored
+                // furni (rotation 180 + skew 180) around half their real position.
+                {
+                    let (x, y) = crate::player::stage::movie_to_canvas_point(
+                        player, sprite.loc_h as f64, sprite.loc_v as f64,
+                    );
+                    (x.round() as i32, y.round() as i32)
+                },
                 sprite.width,
                 sprite.height,
                 w3d_cam,
