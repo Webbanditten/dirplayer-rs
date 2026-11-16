@@ -312,6 +312,55 @@ pub fn script_get_prop(
     }
 }
 
+/// `obj.ancestor = other` (or `obj[#ancestor] = other`) with a script instance
+/// on the right-hand side.
+///
+/// A script that declares `property ancestor` owns that slot, so the
+/// assignment replaces its ancestor; the bodypart classes rely on that
+/// (`ancestor = tAncestor` in `define`). A script that does NOT declare it
+/// behaves like any other undeclared property: the set is delegated down the
+/// existing ancestor chain and lands on the first object that can take it,
+/// i.e. the end of the chain. Habbo's gamesystem depends on this:
+/// `Gamesystem Manager Class.createGamesystem` builds each module with
+/// `createObject(id, class)` (chain: module → Object Base Class holding `id`)
+/// and then does `tObj[#ancestor] = pSystemThread`. Replacing would drop the
+/// base object, `me.getID()` would return VOID, and `receiveUpdate(VOID)`
+/// would leave the SnowStorm turn manager without updates, so no game turn is
+/// ever processed (players can't walk).
+pub fn set_script_instance_ancestor(
+    player: &mut DirPlayer,
+    instance_ref: &ScriptInstanceRef,
+    new_ancestor: ScriptInstanceRef,
+) {
+    let ancestor_sym = Symbol::builtin(BuiltInSymbol::Ancestor);
+    let new_id = new_ancestor.id();
+    let mut target = instance_ref.clone();
+    for _ in 0..1024 {
+        let instance = player.allocator.get_script_instance(&target);
+        if instance.properties.contains_key(&ancestor_sym) {
+            break;
+        }
+        match &instance.ancestor {
+            // Already somewhere in the chain: nothing to do.
+            Some(next) if next.id() == new_id => return,
+            Some(next) => target = next.clone(),
+            None => break,
+        }
+    }
+    // Never build a cycle. If the new ancestor's own chain leads back to the
+    // object we were about to link from, fall back to a plain replacement.
+    let mut cursor = Some(new_ancestor.clone());
+    for _ in 0..1024 {
+        let Some(current) = cursor else { break };
+        if current.id() == target.id() {
+            target = instance_ref.clone();
+            break;
+        }
+        cursor = player.allocator.get_script_instance(&current).ancestor.clone();
+    }
+    player.allocator.get_script_instance_mut(&target).ancestor = Some(new_ancestor);
+}
+
 pub fn script_set_prop(
     player: &mut DirPlayer,
     script_instance_ref: &ScriptInstanceRef,
@@ -349,10 +398,7 @@ pub fn script_set_prop(
                 // unreachable from every component built on that thread.
                 Datum::Void => Ok(()),
                 Datum::ScriptInstanceRef(ancestor_id) => {
-                    let script_instance = player
-                        .allocator
-                        .get_script_instance_mut(&script_instance_ref);
-                    script_instance.ancestor = Some(ancestor_id);
+                    set_script_instance_ancestor(player, script_instance_ref, ancestor_id);
                     Ok(())
                 }
                 // Non-instance ancestors (e.g. a TimeoutInstance) live in the

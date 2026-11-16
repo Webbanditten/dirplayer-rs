@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use crate::{
     director::lingo::datum::{Datum, DatumType, datum_bool},
     player::{
-        DatumRef, DirPlayer, ScriptError, ScriptErrorCode, allocator::ScriptInstanceAllocatorTrait, cast_lib::CastMemberRef, handlers::types::TypeUtils, player_call_script_handler, player_handle_scope_return, reserve_player_mut, reserve_player_ref, script::{Script, ScriptHandlerRef, script_get_prop, script_set_prop}, script_ref::ScriptInstanceRef, symbols::{builtin::BuiltInSymbol, symbol::Symbol}, virtual_scripts::VirtualScriptRegistry
+        DatumRef, DirPlayer, ScriptError, ScriptErrorCode, allocator::ScriptInstanceAllocatorTrait, cast_lib::CastMemberRef, handlers::types::TypeUtils, player_call_script_handler, player_handle_scope_return, reserve_player_mut, reserve_player_ref, script::{Script, ScriptHandlerRef, script_get_prop, script_set_prop, set_script_instance_ancestor}, script_ref::ScriptInstanceRef, symbols::{builtin::BuiltInSymbol, symbol::Symbol}, virtual_scripts::VirtualScriptRegistry
     },
 };
 use crate::player::script::script_get_prop_opt;
@@ -180,9 +180,8 @@ impl ScriptInstanceUtils {
                         Ok(())
                     }
                     Datum::ScriptInstanceRef(ancestor_instance_id) => {
-                        let script_instance =
-                            player.allocator.get_script_instance_mut(&self_instance_id);
-                        script_instance.ancestor = Some(ancestor_instance_id);
+                        // See script.rs::set_script_instance_ancestor.
+                        set_script_instance_ancestor(player, &self_instance_id, ancestor_instance_id);
                         Ok(())
                     }
                     // For non-ScriptInstanceRef ancestors (like TimeoutInstance),
