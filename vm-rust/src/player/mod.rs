@@ -3797,7 +3797,12 @@ impl DirPlayer {
         // intact at this point, so dump them.
         crate::console_error!("{}", self.format_scope_stack(5, 25));
         warn!("[!!] play failed with error: {}", err.message);
-        self.stop();
+        // Embedded without the debugger (break-on-error off), keep playing like Shockwave: the
+        // failing handler is already unwound. Stopping froze the whole client on one error
+        // (Habbo: a room whose furni raised one never finished loading).
+        if self.break_on_error {
+            self.stop();
+        }
 
         // Dispatch debug update with full call stack (scopes are preserved on error)
         JsApi::dispatch_debug_update(self);
@@ -5079,6 +5084,11 @@ pub async fn player_call_script_handler_raw_args(
             Err(err) => {
                 // abort is flow control, not a real error - skip break-on-error
                 if err.code != ScriptErrorCode::Abort {
+                    // Say where it happened before the frames unwind: the error reaches JS as a
+                    // bare message, and with break-on-error off nothing else records the handler.
+                    reserve_player_ref(|player| {
+                        crate::console_error!("[!!] script error: {}\n{}", err.message, player.format_scope_stack(5, 25));
+                    });
                     let should_break = reserve_player_ref(|player| player.break_on_error);
                     if should_break {
                         let (current_script_ref, current_bytecode_idx) = reserve_player_ref(|player| {
@@ -5142,6 +5152,11 @@ pub async fn player_call_script_handler_raw_args(
             HandlerExecutionResult::Error(err) => {
                 // abort is flow control, not a real error - skip break-on-error
                 if err.code != ScriptErrorCode::Abort {
+                    // Say where it happened before the frames unwind: the error reaches JS as a
+                    // bare message, and with break-on-error off nothing else records the handler.
+                    reserve_player_ref(|player| {
+                        crate::console_error!("[!!] script error: {}\n{}", err.message, player.format_scope_stack(5, 25));
+                    });
                     let should_break = reserve_player_ref(|player| player.break_on_error);
                     if should_break {
                         let (current_script_ref, current_bytecode_idx) = reserve_player_ref(|player| {
