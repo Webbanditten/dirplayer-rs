@@ -5174,6 +5174,16 @@ impl WebGL2Renderer {
                     } else {
                         255
                     }
+                } else if (should_use_colorkey_ink33 || should_use_colorkey_ink35) && (r, g, b) == (255, 255, 255) {
+                    // Add Pin / Sub Pin: the bitmap's white background is transparent even
+                    // when the sprite carries a coloured bgColor. Director colorizes an
+                    // indexed bitmap first (white -> bgColor), so the bgColor key then drops
+                    // those pixels; the shader keys on the raw texel and missed them.
+                    // Habbo sets every furni sprite's bgColor to the item's part colour,
+                    // including the ink-33 loading placeholder, which therefore drew a white
+                    // square around the ghost box on coloured furni. With the default white
+                    // bgColor these pixels were already keyed, so nothing else changes.
+                    0
                 } else if should_use_colorkey_ink3 || should_use_colorkey_ink33 || should_use_colorkey_ink35 || should_use_colorkey_ink36 || should_use_colorkey_ink37 || should_use_colorkey_ink39 {
                     // Ink 3/33/35/36/37/39 color-key transparency is handled by shader
                     // The shader compares pixel RGB with bgColor uniform
