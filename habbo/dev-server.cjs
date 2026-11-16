@@ -34,7 +34,7 @@ const POLYFILL = path.join(__dirname, '..', 'dist-polyfill', 'dirplayer-polyfill
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 23), ...a);
 
-function page(sso) {
+function page(sso, forward) {
   const self = `http://127.0.0.1:${PORT}`;
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // Same params as OdinCMS Views/Client/Index.cshtml. The game/MUS host+port stay what the client is told;
@@ -47,6 +47,16 @@ function page(sso) {
     sw5: `external.variables.txt=${self}/assets/gamedata/external_variables.txt;external.texts.txt=${self}/assets/gamedata/external_texts.txt`,
     sw6: `use.sso.ticket=1;sso.ticket=${sso}`,
   };
+  // ?forward=public,<roomId> | private,<roomId> | <type>,<id>: the CMS client's sw7 room forward. The client
+  // (Navigator Component goStraightToRoom) treats type 1 as public and anything else as private. For public
+  // rooms it NAVIGATEs to the node id, and Odin numbers public-room nodes RoomManager.PUBLIC_ROOM_OFFSET
+  // (1000) + room id, so a bare room id would be read as a category.
+  const fw = /^(public|private|\d+),(\d+)$/.exec(forward || '');
+  if (fw) {
+    const type = fw[1] === 'public' ? 1 : fw[1] === 'private' ? 2 : parseInt(fw[1], 10);
+    const id = fw[1] === 'public' ? 1000 + parseInt(fw[2], 10) : parseInt(fw[2], 10);
+    sw.sw7 = `forward.type=${type};forward.id=${id}`;
+  }
   const attrs = Object.entries(sw).map(([k, v]) => `${k}="${esc(v)}"`).join('\n         ');
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Habbo · DirPlayer dev</title>
@@ -79,9 +89,12 @@ function proxyAsset(req, res, assetPath) {
       up.on('end', () => {
         // Point every asset URL at this proxy so downloads stay same-origin.
         const rewritten = body.replace(/https?:\/\/images\.habbo-danmark\.com\//g, `http://127.0.0.1:${PORT}/assets/`);
+        // DROP_VARS=cast.entry.27,... removes variables (for experiments, e.g. freeing a cast slot).
+        const drop = (process.env.DROP_VARS || '').split(',').filter(Boolean);
+        const filtered = drop.length ? rewritten.split(/\r?\n/).filter(l => !drop.some(d => l.startsWith(d + '='))).join('\n') : rewritten;
         res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store' });
-        res.end(Buffer.from(rewritten, 'latin1'));
-        log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten)`);
+        res.end(Buffer.from(filtered, 'latin1'));
+        log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten${drop.length ? ', dropped ' + drop.join(',') : ''})`);
       });
       return;
     }
@@ -99,7 +112,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(page(url.searchParams.get('sso') || ''));
+    return res.end(page(url.searchParams.get('sso') || '', url.searchParams.get('forward')));
   }
   if (url.pathname === '/dirplayer-polyfill.js') {
     if (!fs.existsSync(POLYFILL)) { res.writeHead(404); return res.end('run npm run build-polyfill'); }
@@ -110,6 +123,49 @@ const server = http.createServer((req, res) => {
   res.writeHead(404); res.end();
 });
 
+
+// LOG_PACKETS=1: log Habbo protocol headers. Client->server frames are a 3-char Base64 length, then a 2-char
+// Base64 header id. Server->client messages are a 2-char header id, then the body, terminated by \x01.
+const LOG_PACKETS = process.env.LOG_PACKETS === '1';
+const LOG_BODIES = new Set((process.env.LOG_BODIES || '').split(',').filter(Boolean).map(Number));
+const b64 = s => [...s].reduce((v, ch) => (v << 6) | (ch.charCodeAt(0) - 64), 0);
+function packetLogger(name) {
+  let up = Buffer.alloc(0), down = Buffer.alloc(0);
+  const counts = new Map();
+  const lastBody = new Map();
+  const timer = setInterval(() => {
+    if (!counts.size) return;
+    log(name, '<', [...counts].map(([h, n]) => n > 1 ? `${h}x${n}` : `${h}`).join(' '));
+    counts.clear();
+  }, 1000);
+  return {
+    clientData(d) {
+      up = Buffer.concat([up, d]);
+      while (up.length >= 5) {
+        const len = b64(up.subarray(0, 3).toString('latin1'));
+        if (up.length < 3 + len) break;
+        const msg = up.subarray(3, 3 + len);
+        log(name, '>', b64(msg.subarray(0, 2).toString('latin1')), JSON.stringify(msg.subarray(2, 40).toString('latin1')));
+        up = up.subarray(3 + len);
+      }
+    },
+    serverData(d) {
+      down = Buffer.concat([down, d]);
+      let i;
+      while ((i = down.indexOf(1)) >= 0) {
+        const h = b64(down.subarray(0, 2).toString('latin1'));
+        counts.set(h, (counts.get(h) || 0) + 1);
+        // LOG_BODIES=244,...: also log bodies of these server messages (only when they differ from the last one).
+        if (LOG_BODIES.has(h)) {
+          const body = down.subarray(2, i).toString('latin1');
+          if (body !== lastBody.get(h)) { log(name, '<', h, `(${body.length}B)`, JSON.stringify(body.slice(0, 160))); lastBody.set(h, body); }
+        }
+        down = down.subarray(i + 1);
+      }
+    },
+    stop() { clearInterval(timer); },
+  };
+}
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   const p = new URL(req.url, 'http://x').pathname;
@@ -119,9 +175,10 @@ server.on('upgrade', (req, socket, head) => {
     const name = p.slice(4);
     const tcp = net.createConnection({ host: GAME_HOST, port }, () => log(name, 'connected to', `${GAME_HOST}:${port}`));
     let up = 0, down = 0;
-    tcp.on('data', d => { down += d.length; if (ws.readyState === ws.OPEN) ws.send(d); });
-    ws.on('message', d => { up += d.length; if (tcp.writable) tcp.write(d); });
-    const close = why => { log(name, 'closed', `(${why}; client->server ${up}B, server->client ${down}B)`); try { ws.close(); } catch {} tcp.destroy(); };
+    const pl = LOG_PACKETS && name === 'game' ? packetLogger(name) : null;
+    tcp.on('data', d => { down += d.length; if (pl) pl.serverData(d); if (ws.readyState === ws.OPEN) ws.send(d); });
+    ws.on('message', d => { up += d.length; if (pl) pl.clientData(Buffer.from(d)); if (tcp.writable) tcp.write(d); });
+    const close = why => { if (pl) pl.stop(); log(name, 'closed', `(${why}; client->server ${up}B, server->client ${down}B)`); try { ws.close(); } catch {} tcp.destroy(); };
     tcp.on('close', () => close('tcp closed'));
     tcp.on('error', e => close('tcp error ' + e.message));
     ws.on('close', () => close('ws closed'));

@@ -27,8 +27,24 @@ What the harness does:
 
 Env overrides: `PORT`, `ASSETS`, `GAME_HOST`, `GAME_PORT`, `MUS_PORT`, `SITE_URL`.
 
+Page params:
+- `?sso=<ticket>`: the SSO ticket (`sw6`).
+- `?forward=public,<roomId>`, `private,<roomId>` or `<type>,<id>`: room forward (`sw7`), as the CMS does it.
+  For public rooms the harness adds Odin's `PUBLIC_ROOM_OFFSET` (1000), because the client navigates to the
+  node id. Example: `forward=public,67` is the SnowStorm lobby.
+
+Debug switches (env):
+- `LOG_PACKETS=1`: log client→server header ids (with the start of each body) and server→client header
+  counts per second, on the game socket.
+- `LOG_BODIES=244,…`: with `LOG_PACKETS`, also log these server messages' bodies when they change.
+- `DROP_VARS=cast.entry.27,…`: remove lines from `external_variables.txt` (experiments, e.g. freeing a cast slot).
+
 ## Status (2026-11-16)
 - Hotel view, SSO login, navigator, entering a room, room rendering and chat work.
-- VM fix needed so far: `the displayTemplate` (Director 11 movie property) was missing, and the client reads
-  it at start-up.
+- BattleBall and SnowStorm: full 2-player games work (lobby, create, join, start, walk, throw, score).
+- VM fixes so far:
+  - `the displayTemplate` (Director 11 movie property) was missing, and the client reads it at start-up.
+  - Assigning `ancestor` on an instance whose script doesn't declare `property ancestor` now delegates down
+    the existing chain instead of replacing it. Without that the gamesystem modules lose their ID, the
+    SnowStorm turn manager never gets `update` calls, and nobody can walk.
 - The polyfill is about 15 MB (6.9 MB gzipped) because the WASM is embedded.
