@@ -4709,6 +4709,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.rotation = 0.0;
                 }
+                sprite.has_rotation_mod = sprite.rotation != 0.0;
                 Ok(())
             },
         ),
@@ -4721,6 +4722,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.skew = 0.0;
                 }
+                sprite.has_skew_mod = sprite.skew != 0.0;
                 Ok(())
             },
         ),
