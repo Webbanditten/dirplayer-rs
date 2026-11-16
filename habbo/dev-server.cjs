@@ -133,6 +133,13 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/javascript', 'cache-control': 'no-store' });
     return fs.createReadStream(POLYFILL).pipe(res);
   }
+  if (url.pathname === '/xtra-registry.json') {
+    // Written next to the bundle by build-polyfill; the polyfill fetches it from its own folder.
+    const registry = path.join(path.dirname(POLYFILL), 'xtra-registry.json');
+    if (!fs.existsSync(registry)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    return fs.createReadStream(registry).pipe(res);
+  }
   if (url.pathname.startsWith('/assets/')) return proxyAsset(req, res, url.pathname.slice('/assets'.length) + url.search);
   res.writeHead(404); res.end();
 });

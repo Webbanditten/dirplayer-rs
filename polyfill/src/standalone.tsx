@@ -131,8 +131,10 @@ function init() {
     loadDefaultXtraRegistry(customRegistryUrl || undefined);
   }
 
-  const disableFlash = polyfillScript?.hasAttribute('data-disable-flash') ?? false;
-  if (disableFlash) {
+  // Either the script attribute or DirPlayer.configureFlash({ disableFlash: true }) before init().
+  const disableFlashAttr = polyfillScript?.hasAttribute('data-disable-flash') ?? false;
+  const disableFlash = disableFlashAttr || (window as any).__dirplayerFlashConfig?.disableFlash === true;
+  if (disableFlashAttr) {
     const win = window as any;
     win.__dirplayerFlashConfig = {
       ...(win.__dirplayerFlashConfig || {}),
