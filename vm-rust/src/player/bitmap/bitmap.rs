@@ -1376,7 +1376,7 @@ impl PaletteQuantizer {
         self.table.is_empty()
     }
 
-    /// Nearest entry to `(r, g, b)` by the L1 channel distance, over the first
+    /// Nearest entry to `(r, g, b)` by squared Euclidean distance, over the first
     /// `limit` entries. Ties go to the lowest index, matching the `<` in the
     /// scan this replaces.
     #[inline]
@@ -1408,9 +1408,12 @@ impl PaletteQuantizer {
         let mut result_index: u8 = 0;
         let mut result_distance = i32::MAX;
         for (idx, &(pr, pg, pb)) in table.iter().enumerate().take(limit) {
-            let distance = (r as i32 - pr as i32).abs()
-                + (g as i32 - pg as i32).abs()
-                + (b as i32 - pb as i32).abs();
+            // Squared Euclidean, as `color.paletteIndex` uses. The L1 sum picked
+            // (201,236,239) over white for (239,239,239), which turned Habbo's
+            // grey buttons cyan when they were copied into the sound machine's palette.
+            let distance = (r as i32 - pr as i32).pow(2)
+                + (g as i32 - pg as i32).pow(2)
+                + (b as i32 - pb as i32).pow(2);
             if distance < result_distance {
                 result_index = idx as u8;
                 result_distance = distance;

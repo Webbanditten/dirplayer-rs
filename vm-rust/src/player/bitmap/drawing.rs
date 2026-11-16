@@ -422,9 +422,11 @@ impl Bitmap {
                             &own_palette,
                             self.original_bit_depth,
                         );
-                        let distance = (r as i32 - palette_color.0 as i32).abs()
-                            + (g as i32 - palette_color.1 as i32).abs()
-                            + (b as i32 - palette_color.2 as i32).abs();
+                        // Squared Euclidean, as `color.paletteIndex` uses. The L1 sum picked
+                        // (201,236,239) over white for (239,239,239).
+                        let distance = (r as i32 - palette_color.0 as i32).pow(2)
+                            + (g as i32 - palette_color.1 as i32).pow(2)
+                            + (b as i32 - palette_color.2 as i32).pow(2);
                         if distance < result_distance {
                             result_index = palette_idx;
                             result_distance = distance;
@@ -444,9 +446,11 @@ impl Bitmap {
                             &own_palette,
                             self.original_bit_depth,
                         );
-                        let distance = (r as i32 - palette_color.0 as i32).abs()
-                            + (g as i32 - palette_color.1 as i32).abs()
-                            + (b as i32 - palette_color.2 as i32).abs();
+                        // Squared Euclidean, as `color.paletteIndex` uses. The L1 sum picked
+                        // (201,236,239) over white for (239,239,239).
+                        let distance = (r as i32 - palette_color.0 as i32).pow(2)
+                            + (g as i32 - palette_color.1 as i32).pow(2)
+                            + (b as i32 - palette_color.2 as i32).pow(2);
                         if distance < result_distance {
                             result_index = idx;
                             result_distance = distance;
@@ -1957,6 +1961,20 @@ impl Bitmap {
         self.matte = None;
         self.mark_dirty();
 
+        // Same-depth, same-palette indexed copy: move the palette INDEX, as the
+        // rect copyPixels fast path does, instead of resolving to RGB and
+        // re-quantizing. A palette with duplicate colours otherwise changes the
+        // index of every pixel whose colour also appears at a lower index. Habbo
+        // mirrors each private-room floor tile with a quad copy and then calls
+        // createMatte(); its art uses index 0 only for the background and another
+        // index for the interior whites, so re-quantizing turned those whites into
+        // index 0, the matte punched holes through every other pixel, and the
+        // tile underneath showed through as dotted black lines on the floor.
+        let copy_indices = self.bit_depth <= 8
+            && src.bit_depth == self.bit_depth
+            && src.palette_ref == self.palette_ref
+            && !src.use_alpha;
+
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 // Solve b*u + c*v + d*u*v = (x - a.x, y - a.y) via Newton.
@@ -2029,6 +2047,12 @@ impl Bitmap {
                 // Kept as a backstop for source rects extending past the bitmap.
                 if sx < 0 || sx >= src.width as i32 || sy < 0 || sy >= src.height as i32 {
                     continue;
+                }
+                if copy_indices {
+                    if let ColorRef::PaletteIndex(i) = src.get_pixel_color_ref(sx as u16, sy as u16) {
+                        self.set_pixel_index(x, y, i);
+                        continue;
+                    }
                 }
                 let (r, g, bl, a) = src.get_pixel_color_with_alpha(palettes, sx as u16, sy as u16);
                 // Honor the source's per-pixel alpha for 32-bit useAlpha images,
