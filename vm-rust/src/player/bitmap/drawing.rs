@@ -2742,6 +2742,30 @@ impl Bitmap {
                         }
                     }
 
+                    // Indexed into indexed, same depth AND same palette, plain copy:
+                    // keep the index. Going through RGB and back picks the lowest index
+                    // of a colour the palette lists twice. Habbo mirrors private-room
+                    // floor tiles (a flipped quad, which arrives here as a flipped rect)
+                    // and then calls createMatte(); the tile art uses index 0 only for
+                    // the background and a duplicate white inside, so re-quantising
+                    // punched matte holes and the tiles below showed as grid lines.
+                    // Different palettes still remap through RGB, as Director does: the
+                    // grey button pieces (interface palette, index 129) copied into a
+                    // Sound_System Palette image must stay grey, and index 129 there is black.
+                    if self.bit_depth == src.bit_depth
+                        && src.palette_ref == self.palette_ref
+                        && alpha >= 0.999
+                        && !params.is_text_rendering
+                        && !(params.sprite.map_or(false, |sp| sp.has_fore_color || sp.has_back_color)
+                            || params.bg_color_explicit
+                            || params.fore_color_explicit)
+                    {
+                        if let ColorRef::PaletteIndex(i) = src.get_pixel_color_ref(sx, sy) {
+                            self.set_pixel_index(dst_x, dst_y, i);
+                            continue;
+                        }
+                    }
+
                     let color_ref = src.get_pixel_color_ref(sx, sy);
                     let (mut sr, mut sg, mut sb) = if let (ColorRef::PaletteIndex(i), Some(cache)) = (&color_ref, &src_palette_cache) {
                         cache[*i as usize]
