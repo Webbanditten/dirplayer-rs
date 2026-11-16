@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RootState } from '../../store';
 import { useSelector } from 'react-redux'
 import {
@@ -12,6 +12,7 @@ import { initAudioBackend } from '../../audio/audioInit';
 import Stage from '../../views/Stage';
 import ShadowPortal from '../ShadowPortal';
 import ErrorOverlay from '../ErrorOverlay';
+import { usePixelSnap } from '../../utils/pixelSnap';
 
 type EmbedPlayerProps = {
   width: string
@@ -35,6 +36,8 @@ export default function EmbedPlayer({width, height, src, externalParams, launchC
   const isVmReady = useSelector<RootState>(state => state.vm.isReady);
   const movieLoadError = useSelector<RootState, string | undefined>(state => state.vm.movieLoadError);
   const [userClicked, setUserClicked] = useState(!requireClickToPlay);
+  const rootRef = useRef<HTMLDivElement>(null);
+  usePixelSnap(rootRef, userClicked);
 
   const normalizeCssSize = useCallback((value: string) => {
     const trimmed = value.trim();
@@ -137,7 +140,7 @@ export default function EmbedPlayer({width, height, src, externalParams, launchC
   }
 
   return (
-    <div style={{ width: widthValue, height: heightValue, position: 'relative', backgroundColor: '#000' }}>
+    <div ref={rootRef} style={{ width: widthValue, height: heightValue, position: 'relative', backgroundColor: '#000' }}>
       {!!isVmReady && !movieLoadError && <Stage enableGestures={enableGestures} />}
       {movieLoadError && (
         <ShadowPortal style={{ position: 'absolute', inset: 0, zIndex: 9999 }}>
