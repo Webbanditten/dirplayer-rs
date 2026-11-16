@@ -1551,10 +1551,32 @@ impl WebGL2Renderer {
             // test ran a few lines further down before, after the clones.)
             {
                 let (stage_w, stage_h) = self.size;
-                if rect.right <= 0
-                    || rect.bottom <= 0
-                    || rect.left >= stage_w as i32
-                    || rect.top >= stage_h as i32
+                // `rect` is the UNtransformed rect. A rotated or skewed sprite is
+                // drawn transformed around its loc and can land somewhere else
+                // entirely: Habbo mirrors furni with rotation 180 + skew 180, so a
+                // part whose plain rect sits past the right edge is drawn mirrored
+                // inside the stage (Grunge Madras in Gyden lost its last part).
+                // Cull those on a box around the loc that covers any rotation.
+                let (left, top, right, bottom) = if sprite.rotation != 0.0 || sprite.skew != 0.0 {
+                    let (cx, cy) = (sprite.loc_h as f64, sprite.loc_v as f64);
+                    let r = [
+                        (rect.left as f64, rect.top as f64),
+                        (rect.right as f64, rect.top as f64),
+                        (rect.left as f64, rect.bottom as f64),
+                        (rect.right as f64, rect.bottom as f64),
+                    ]
+                    .iter()
+                    .map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt())
+                    .fold(0.0f64, f64::max)
+                    .ceil() as i32;
+                    (cx as i32 - r, cy as i32 - r, cx as i32 + r, cy as i32 + r)
+                } else {
+                    (rect.left, rect.top, rect.right, rect.bottom)
+                };
+                if right <= 0
+                    || bottom <= 0
+                    || left >= stage_w as i32
+                    || top >= stage_h as i32
                 {
                     return;
                 }
