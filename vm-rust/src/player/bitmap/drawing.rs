@@ -2110,9 +2110,14 @@ impl Bitmap {
         let _ = param_list; // ink/blend handling deferred — v1 = copy ink only.
     }
 
+    /// Bounds of `rect` after the sprite transform: rotation around the pivot, then (for skew ±180) the
+    /// y offset negated. That is the inverse of the per-pixel mapping in `copy_pixels_with_params`, so
+    /// Director's mirror trick (rotation 180 + skew 180) yields the horizontally mirrored rect instead of
+    /// a 180° rotated one, which put the rows below a bottom-registered sprite and drew nothing.
     fn calculate_rotated_bounding_box(
         rect: &IntRect,
         rotation_degrees: f64,
+        skew_flip: bool,
         pivot_x: i32,
         pivot_y: i32,
     ) -> IntRect {
@@ -2139,7 +2144,8 @@ impl Bitmap {
             let dy = y - pivot_y as f64;
             
             let rotated_x = pivot_x as f64 + (dx * cos_theta - dy * sin_theta);
-            let rotated_y = pivot_y as f64 + (dx * sin_theta + dy * cos_theta);
+            let rotated_dy = dx * sin_theta + dy * cos_theta;
+            let rotated_y = pivot_y as f64 + if skew_flip { -rotated_dy } else { rotated_dy };
             
             rotated_corners.push((rotated_x, rotated_y));
         }
@@ -2404,13 +2410,14 @@ impl Bitmap {
         // Director-style draw bounds (allow rotated overflow)
         // ----------------------------------------------------------
         let (draw_min_x, draw_max_x, draw_min_y, draw_max_y) =
-            if has_sprite_rotation {
+            if has_sprite_rotation || has_skew_flip {
                 if let (Some(orig_rect), Some(sprite)) =
                     (&params.original_dst_rect, params.sprite)
                 {
                     let expanded = Self::calculate_rotated_bounding_box(
                         orig_rect,
-                        params.rotation,
+                        if has_sprite_rotation { params.rotation } else { 0.0 },
+                        has_skew_flip,
                         sprite.loc_h,
                         sprite.loc_v,
                     );
