@@ -3520,6 +3520,13 @@ impl WebGL2Renderer {
         // Note: Ink 40 does NOT use foreColor tinting - it just uses color-key transparency
         let is_indexed = bitmap_bit_depth >= 1 && bitmap_bit_depth <= 8;
         let is_ink36_indexed = is_indexed && ink == 36;
+        // Habbo fork: a sprite's foreColor/bgColor don't tint a 32-bit bitmap member under ink
+        // 0/8/9. Habbo's Fuse windows pass an element's #color/#bgColor both to copyPixels (into
+        // the element's own 32-bit buffer, which tints it) and to the sprite showing that buffer,
+        // so tinting here too applied the colour twice: the pet status window's #EFEFEF text
+        // fields came out 224 grey instead of 239. Upstream keeps the sprite tint for Coke
+        // Studios (DiscoLight); see habbo/README.md. Text, shapes and film loops are unchanged.
+        let sprite_tints_32bit = !matches!(texture_source, TextureSource::Bitmap { .. });
 
         let colorize_params = if bitmap_bit_depth == 1 && (ink == 0 || ink == 1 || ink == 36) {
             // Ink 1 (Transparent) colorizes a 1-bit bitmap exactly as Copy and
@@ -3574,7 +3581,7 @@ impl WebGL2Renderer {
             //   shape renders its raw pink gradient and blends pink over
             //   the destination instead of producing the wood-tinted
             //   color the texturecolor multiply was meant to give.
-            (bitmap_bit_depth == 32 && (ink == 0 || ink == 8 || ink == 9 || ink == 36)) ||
+            (bitmap_bit_depth == 32 && (ink == 36 || (sprite_tints_32bit && (ink == 0 || ink == 8 || ink == 9)))) ||
             // Indexed (2-8 bit) colorize: ink 0 (Copy palette interpolation),
             // ink 8 (Matte) and ink 9 (Mask) — all three apply the
             // foreColor→bgColor lerp on near-grayscale pixels in

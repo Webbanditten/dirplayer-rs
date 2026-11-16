@@ -62,3 +62,14 @@ Debug switches (env):
     The client's SSO login connects twice and replaces the first instance; its socket used to stay open until
     the server timed it out. `breakConnection` now really closes the socket as well.
 - The polyfill is about 15 MB (6.9 MB gzipped) because the WASM is embedded.
+
+## Habbo-specific deviations from upstream
+
+This fork runs Habbo Danmark only. Where Habbo and another movie need opposite behaviour, Habbo wins, and the
+change is listed here so a rebase onto upstream can keep or drop it on purpose.
+
+- **No sprite tint on 32-bit bitmaps under ink 0/8/9** (WebGL2 `sprite_tints_32bit`, Canvas2D `sprite_tints` in
+  `drawing.rs`). Fuse windows pass an element's `#color`/`#bgColor` to `copyPixels` (into the element's 32-bit
+  buffer, which tints it) and to the sprite that shows the buffer, so tinting on the sprite too applied it twice
+  (pet status window: 224 grey instead of #EFEFEF). Upstream tints there for Coke Studios' DiscoLight. Explicit
+  `copyPixels` colours, text, shapes, film loops, indexed bitmaps and ink 36 are unchanged.

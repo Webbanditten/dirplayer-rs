@@ -3319,8 +3319,11 @@ impl Bitmap {
                 // Studios' chat renderer does the latter to tint `cc.bubble.left`
                 // with the avatar chest color via
                 //   bubblename.copyPixels(sourceimg, ..., [#bgColor: cColor])
-                let sprite_fg = params.sprite.map_or(false, |sp| sp.has_fore_color);
-                let sprite_bg = params.sprite.map_or(false, |sp| sp.has_back_color);
+                // Habbo fork: a sprite's colours don't tint a 32-bit bitmap (the WebGL2 renderer's
+                // `sprite_tints_32bit`); explicit copyPixels #color/#bgColor still do.
+                let sprite_tints = src.original_bit_depth != 32 || params.is_text_rendering;
+                let sprite_fg = sprite_tints && params.sprite.map_or(false, |sp| sp.has_fore_color);
+                let sprite_bg = sprite_tints && params.sprite.map_or(false, |sp| sp.has_back_color);
                 let has_fg = sprite_fg || params.fore_color_explicit;
                 let has_bg = sprite_bg || params.bg_color_explicit;
                 if (has_fg || has_bg)
