@@ -104,13 +104,14 @@ function proxyAsset(req, res, assetPath) {
           const i = lines.findIndex(l => l.startsWith(key));
           if (i >= 0) lines[i] = s; else lines.push(s);
         }
-        res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store' });
+        res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
         res.end(Buffer.from(lines.join('\n'), 'latin1'));
         log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten${drop.length ? ', dropped ' + drop.join(',') : ''}${set.length ? ', set ' + set.map(s => s.split('=')[0]).join(',') : ''})`);
       });
       return;
     }
-    const headers = {};
+    // CORS so other local pages (the CMS web client on localhost:5080) can use this as their asset proxy too.
+    const headers = { 'access-control-allow-origin': '*' };
     for (const h of ['content-type', 'content-length', 'last-modified', 'etag']) if (up.headers[h]) headers[h] = up.headers[h];
     res.writeHead(up.statusCode || 502, headers);
     up.pipe(res);
