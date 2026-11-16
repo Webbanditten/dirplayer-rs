@@ -219,6 +219,51 @@ pub fn get_sprite_rect_in_context(player: &DirPlayer, sprite_id: i16) -> IntRect
     return (rect.left, rect.top, rect.right, rect.bottom);
 }
 
+/// The rect Lingo sees for `sprite.rect` / `left` / `top` / `right` / `bottom`:
+/// for a rotated or skew-flipped sprite, the bounding box of the drawn quad, as
+/// Director reports it. `get_concrete_sprite_rect` stays untransformed because the
+/// hit test maps the pointer back into it. Habbo mirrors furni with rotation 180 +
+/// skew 180 and validates clicks with `member.image.getPixel(mouse - sprite.left)`;
+/// with the untransformed left the lookup fell outside the image and every click on
+/// a mirrored public-room seat (Udsigten Cafe's sofas) was dropped.
+pub fn get_sprite_bounds_in_context(player: &DirPlayer, sprite_id: i16) -> IntRectTuple {
+    let rect = get_sprite_rect_in_context(player, sprite_id);
+    let Some(sprite) = get_sprite_in_context(player, sprite_id) else {
+        return rect;
+    };
+    let has_rotation = sprite.rotation.abs() > 0.1;
+    let has_skew_flip = sprite.has_skew_flip();
+    if !has_rotation && !has_skew_flip {
+        return rect;
+    }
+    // Forward transform around the loc: skew flip (mirror y), then rotate; the
+    // inverse of what `concrete_sprite_hit_test` applies to the pointer.
+    let (cx, cy) = (sprite.loc_h as f64, sprite.loc_v as f64);
+    let theta = sprite.rotation * std::f64::consts::PI / 180.0;
+    let (sin_t, cos_t) = theta.sin_cos();
+    let corners = [
+        (rect.0 as f64, rect.1 as f64),
+        (rect.2 as f64, rect.1 as f64),
+        (rect.0 as f64, rect.3 as f64),
+        (rect.2 as f64, rect.3 as f64),
+    ];
+    let (mut l, mut t, mut r, mut b) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (x, y) in corners {
+        let dx = x - cx;
+        let mut dy = y - cy;
+        if has_skew_flip {
+            dy = -dy;
+        }
+        let px = cx + dx * cos_t - dy * sin_t;
+        let py = cy + dx * sin_t + dy * cos_t;
+        l = l.min(px);
+        t = t.min(py);
+        r = r.max(px);
+        b = b.max(py);
+    }
+    (l.round() as i32, t.round() as i32, r.round() as i32, b.round() as i32)
+}
+
 pub fn get_channel_number_from_index(index: u32) -> u32 {
     match index {
         0..=4 => 0,
@@ -3699,23 +3744,23 @@ pub fn sprite_get_prop(
         Some(BuiltInSymbol::Blend) => Ok(Datum::Int(sprite.map_or(0, |sprite| sprite.blend) as i32)),
         Some(BuiltInSymbol::Ink) => Ok(Datum::Int(sprite.map_or(0, |sprite| sprite.ink) as i32)),
         Some(BuiltInSymbol::Left) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.0 as i32))
         }
         Some(BuiltInSymbol::Top) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.1 as i32))
         }
         Some(BuiltInSymbol::Right) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.2 as i32))
         }
         Some(BuiltInSymbol::Bottom) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.3 as i32))
         }
         Some(BuiltInSymbol::Rect) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Rect([rect.0 as f64, rect.1 as f64, rect.2 as f64, rect.3 as f64], 0))
         }
         Some(BuiltInSymbol::Color) => Ok(Datum::ColorRef(
