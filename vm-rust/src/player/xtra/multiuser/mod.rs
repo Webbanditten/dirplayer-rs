@@ -608,7 +608,22 @@ impl MultiuserXtraManager {
                                 // each char to a byte (`c as u8`) silently mangled
                                 // anything outside Latin-1 and disagreed with what the
                                 // server sends back.
-                                s.into_bytes()
+                                //
+                                // A movie authored before Director 11 has no Unicode:
+                                // Shockwave sends its strings as single-byte Windows-1252,
+                                // and servers for those clients (Habbo v1x/Kepler/Odin:
+                                // ISO-8859-1 on the wire) expect exactly that. Sending
+                                // UTF-8 there broke every non-ASCII string; a Danish hotel
+                                // requested catalogue page "SjÃ¦lden ting" instead of
+                                // "Sjælden ting" and never got an answer. The receive side
+                                // already falls back to Windows-1252 for such servers.
+                                if player.movie.dir_version > 0 && player.movie.dir_version < 1100 {
+                                    s.chars()
+                                        .map(|c| crate::io::encoding::char_to_win1252_byte(c).unwrap_or(b'?'))
+                                        .collect()
+                                } else {
+                                    s.into_bytes()
+                                }
                             }
                             MultiuserConnectionMode::Binary => {
                                 let subject = player.get_datum(args.get(1).unwrap()).string_value()?;
