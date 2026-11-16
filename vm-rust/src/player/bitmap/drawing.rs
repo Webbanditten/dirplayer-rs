@@ -2009,9 +2009,14 @@ impl Bitmap {
 
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                // Solve b*u + c*v + d*u*v = (x - a.x, y - a.y) via Newton.
-                let px = x as f32 - a.0;
-                let py = y as f32 - a.1;
+                // Solve b*u + c*v + d*u*v = (x - a.x, y - a.y) via Newton, at the
+                // pixel's centre. Solving at its corner was off by one along any axis
+                // the quad runs backwards (a -90° rotation, a mirror): the first
+                // pixel landed on the far source edge and was clamped there, and the
+                // near source edge was never read. Habbo's dropdowns build their
+                // bottom border by rotating an edge piece -90°, so it went missing.
+                let px = x as f32 + 0.5 - a.0;
+                let py = y as f32 + 0.5 - a.1;
                 let mut u = 0.5_f32;
                 let mut v = 0.5_f32;
                 let mut converged = false;
@@ -2740,25 +2745,22 @@ impl Bitmap {
                 let src_f_x = src_left_f + (dst_x_idx + phase) * scale_x;
                 let src_f_y = src_top_f + (dst_y_idx + phase) * scale_y;
 
-                // Handle horizontal flip
-                let src_mapped_x = if flip_x {
-                    let rel = src_f_x - src_left_f;
-                    src_left_f + src_w - rel
+                // Flips mirror the integer sample index inside the source rect
+                // (left + right - 1 - i). Mirroring the float position instead
+                // (left + w - rel) sampled one past the far edge under the floor
+                // rule: at 1:1, rows 0 and 1 both read h-1 and source row 0 was
+                // never read. Habbo builds a dropdown's bottom corners by
+                // flipping the top ones (flipV), so the bottom border went missing.
+                let sx = if flip_x {
+                    src_rect.left + src_rect.right - 1 - src_f_x.floor() as i32
                 } else {
-                    src_f_x
+                    src_f_x.floor() as i32
                 };
-
-                // Handle vertical flip
-                let src_mapped_y = if flip_y {
-                    let rel = src_f_y - src_top_f;
-                    src_top_f + src_h - rel
+                let sy = if flip_y {
+                    src_rect.top + src_rect.bottom - 1 - src_f_y.floor() as i32
                 } else {
-                    src_f_y
+                    src_f_y.floor() as i32
                 };
-
-                // Convert to integer sample coordinates with flooring and clamping
-                let sx = src_mapped_x.floor() as i32;
-                let sy = src_mapped_y.floor() as i32;
 
                 let src_max_x = src_rect.right - 1;
                 let src_max_y = src_rect.bottom - 1;
