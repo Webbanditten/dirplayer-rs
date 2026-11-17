@@ -1288,6 +1288,16 @@ pub fn resolve_color_ref(
                             member_ref.cast_member as u32,
                         );
                         palettes.get(slot_number as usize)
+                            // A stale clutId one below its palette: when members were moved after authoring, the
+                            // bitmaps kept pointing at the member just before their palette (Habbo's
+                            // ctlg_dyndeal_* badges point at hh_cat_gfx_all #32, a bitmap; their palette
+                            // "ctlg_dyndeal_background Palette" is #33, which is also what Director exports them
+                            // with). Prefer that neighbour in the same cast over a same-numbered palette in an
+                            // unrelated cast (hh_soundmachine's #32 drew them black).
+                            .or_else(|| palettes.get(CastMemberRefHandlers::get_cast_slot_number(
+                                member_ref.cast_lib as u32,
+                                member_ref.cast_member as u32 + 1,
+                            ) as usize))
                             .or_else(|| palettes.find_by_member(member_ref.cast_member as u32))
                     };
                     if let Some(member) = palette_member {
