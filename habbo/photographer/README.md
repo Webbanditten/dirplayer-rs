@@ -24,6 +24,10 @@ minutes, in memory only.
   count has held for 3 seconds. Then every sprite channel that isn't the room's (visualizer sprites and wrapped
   parts) or a furni's (`pSprList` of the active, passive and item objects) is hidden, and every Fuse window is hidden
   through the window API (the info stand would otherwise show itself again). This repeats until a pass hides nothing.
+- The movie's mouse is parked at (-10000, -10000) through the VM (`mouse_move`): DirPlayer starts it at the stage's
+  top-left and only moves it with pointer events on the canvas, and the room's tile highlighter (a visualizer sprite,
+  `getSprById("hiliter")`) otherwise stays at its default spot on the floor. The hiliter is also left out of the
+  sprites kept.
 - The stage background is made transparent where it touches the edge, and the picture is cropped to the room. A room
   bigger than the stage is shot in parts: all room sprites are moved by ¾ of the stage, shot again and the parts are
   stitched. `clipped` says the room still touches an edge.

@@ -96,6 +96,10 @@ async function takePhoto(job) {
     const forward = (job.roomType === 'public' ? 'public' : 'private') + ',' + job.roomId;
     await page.goto(`http://127.0.0.1:${HARNESS_PORT}/?sso=${encodeURIComponent(job.sso)}&forward=${forward}`);
     await page.waitForFunction(() => window.__vm && window.__vm.mcp_eval_lingo, null, { timeout: 60000 });
+    // The movie's mouse starts at the stage's top-left and only moves with pointer events on the canvas. Park it far
+    // outside the stage, so the room's tile highlighter (it follows the mouse) never shows.
+    const mouseAway = () => page.evaluate(() => window.__vm.mouse_move && window.__vm.mouse_move(-10000, -10000));
+    await mouseAway();
     const ev = (code) => page.evaluate(async (c) => {
       const r = JSON.parse(await window.__vm.mcp_eval_lingo(c));
       return r.success ? String(r.result_value) : 'ERR ' + r.error;
@@ -138,8 +142,11 @@ async function takePhoto(job) {
         const n = parseInt(await ev(C + '.' + list + '.count'), 10) || 0;
         for (let i = 1; i <= n; i++) nums(await ev('string(' + C + '.' + list + '[' + i + '].pSprList)')).forEach((x) => keep.add(x));
       }
+      // The tile highlighter is one of the visualizer's sprites; with the mouse parked it is off stage, hide it anyway.
+      nums(await ev('string(' + V + '.getSprById("hiliter"))')).forEach((x) => keep.delete(x));
       return keep;
     };
+    await mouseAway();
     let keep = new Set();
     for (let pass = 0; pass < 5; pass++) {
       keep = await roomSprites();
@@ -163,6 +170,7 @@ async function takePhoto(job) {
     // A room bigger than the stage is photographed in parts: every room sprite is moved by the same offset, the stage
     // is captured again, and the shots are laid over each other where they belong.
     const canvas = page.locator('canvas').first();
+    await mouseAway();
     const shots = [{ ox: 0, oy: 0, png: (await canvas.screenshot()).toString('base64') }];
     let photo = await page.evaluate(composeShots, shots);
     if (!photo) throw new Error('nothing of the room was drawn');
@@ -177,6 +185,7 @@ async function takePhoto(job) {
         const dx = ox - at.x, dy = oy - at.y;
         for (const n of keep) await ev('sprite(' + n + ').loc = sprite(' + n + ').loc + point(' + dx + ', ' + dy + ')');
         at = { x: ox, y: oy };
+        await mouseAway();
         await sleep(400);
         shots.push({ ox, oy, png: (await canvas.screenshot()).toString('base64') });
       }
