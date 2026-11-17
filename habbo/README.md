@@ -45,6 +45,11 @@ Debug switches (env):
 - `LOCAL_ASSETS=<dir>`: serve a file from that folder instead of prod when its name matches the requested asset (try a
   rebuilt cast, e.g. `hh_room_private_wc.cct`, before uploading it).
 
+## Room photographer
+
+`photographer/`: a small service that photographs rooms (no avatars, pets, chat or interface) with this harness in
+headless Chromium, for the CMS's featured rooms. See [photographer/README.md](photographer/README.md).
+
 ## Status (2026-11-16)
 - Hotel view, SSO login, navigator, entering a room, room rendering and chat work.
 - BattleBall and SnowStorm: full 2-player games work (lobby, create, join, start, walk, throw, score).

@@ -16,7 +16,11 @@
  *
  * Env: PORT (8090), ASSETS (https://images.habbo-danmark.com), GAME_HOST (127.0.0.1), GAME_PORT (12321),
  *      MUS_PORT (12322), SITE_URL (http://localhost:5080, the local CMS), NATIVE_WS (Odin's WebSocket
- *      listener, e.g. ws://127.0.0.1:12323; default: the built-in WS->TCP bridges).
+ *      listener, e.g. ws://127.0.0.1:12323; default: the built-in WS->TCP bridges),
+ *      POLYFILL_URL (load DirPlayer from there instead of the local build, e.g.
+ *      /assets/dirplayer/<build>/dirplayer-polyfill.js: a build deployed on the images host),
+ *      VARS_UPSTREAM (the file /assets/gamedata/external_variables.txt is read from, e.g.
+ *      /gamedata/external_vars_web.php: the web client's variables). ASSETS may be http (an internal host).
  */
 const http = require('http');
 const https = require('https');
@@ -36,6 +40,8 @@ const MUS_PORT = parseInt(process.env.MUS_PORT || '12322', 10);
 const NATIVE_WS = (process.env.NATIVE_WS || '').replace(/\/$/, '');
 const SITE_URL = (process.env.SITE_URL || 'http://localhost:5080').replace(/\/$/, '');
 const POLYFILL = path.join(__dirname, '..', 'dist-polyfill', 'dirplayer-polyfill.js');
+const POLYFILL_URL = process.env.POLYFILL_URL || '/dirplayer-polyfill.js';
+const VARS_UPSTREAM = process.env.VARS_UPSTREAM || '';
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 23), ...a);
 
@@ -66,7 +72,7 @@ function page(sso, forward, large) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Habbo · DirPlayer dev</title>
 <style>body{margin:0;background:#000;color:#ccc;font:12px Verdana,sans-serif}#bar{padding:6px 10px}</style>
-<script src="/dirplayer-polyfill.js" data-manual-init></script>
+<script src="${esc(POLYFILL_URL)}" data-manual-init></script>
 <script>
   DirPlayer.configureFlash({
     disableFlash: true,
@@ -84,7 +90,8 @@ function page(sso, forward, large) {
 }
 
 function proxyAsset(req, res, assetPath) {
-  const target = new URL(ASSETS + assetPath);
+  const isVars = /^\/gamedata\/external_variables\.txt(\?|$)/.test(assetPath);
+  const target = new URL(ASSETS + (isVars && VARS_UPSTREAM ? VARS_UPSTREAM : assetPath));
   // LOCAL_ASSETS=<dir>: serve a file from that folder instead when its name matches the requested one
   // (try a rebuilt cast before uploading it).
   if (process.env.LOCAL_ASSETS) {
@@ -95,8 +102,7 @@ function proxyAsset(req, res, assetPath) {
       return fs.createReadStream(local).pipe(res);
     }
   }
-  const isVars = /\/gamedata\/external_variables\.txt$/.test(target.pathname);
-  const upstream = https.request(target, { method: 'GET', headers: { 'user-agent': 'habbo-dirplayer-dev', accept: '*/*' } }, up => {
+  const upstream = (target.protocol === 'http:' ? http : https).request(target, { method: 'GET', headers: { 'user-agent': 'habbo-dirplayer-dev', accept: '*/*' } }, up => {
     if (isVars && up.statusCode === 200) {
       let body = '';
       up.setEncoding('latin1');
