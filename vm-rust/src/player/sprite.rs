@@ -165,6 +165,8 @@ pub struct Sprite {
     /// reset_for_member_change).
     pub has_rotation_mod: bool,
     pub has_skew_mod: bool,
+    /// A script set flipH/flipV: they survive a member swap, like rotation and skew (reset_for_member_change).
+    pub has_flip_mod: bool,
     pub has_size_tweened: bool,
     pub has_size_changed: bool,
     pub bitmap_size_owned_by_sprite: bool,
@@ -300,6 +302,7 @@ impl Sprite {
             has_blend_mod: false,
             has_rotation_mod: false,
             has_skew_mod: false,
+            has_flip_mod: false,
             has_size_tweened: false,
             has_size_changed: false,
             bitmap_size_owned_by_sprite: false,
@@ -330,8 +333,12 @@ impl Sprite {
         if !self.has_skew_mod {
             self.skew = 0.0;
         }
-        self.flip_h = false;
-        self.flip_v = false;
+        // Flips a script set survive too: the Lido's diving tower jumper ("Jumping Pelle Class") sets flipH = 1 and
+        // then assigns its member, and stood facing away from the board.
+        if !self.has_flip_mod {
+            self.flip_h = false;
+            self.flip_v = false;
+        }
         if !self.has_rotation_mod {
             self.rotation = 0.0;
         }
@@ -397,6 +404,7 @@ impl Sprite {
         self.has_visible_mod = false;
         self.has_rotation_mod = false;
         self.has_skew_mod = false;
+        self.has_flip_mod = false;
         self.has_size_tweened = false;
         self.has_size_changed = false;
         self.bitmap_size_owned_by_sprite = false;

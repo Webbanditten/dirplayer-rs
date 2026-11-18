@@ -141,6 +141,13 @@ fn blend_pixel(
     let effective_alpha = src_alpha * blend_alpha;
 
     match ink {
+        // 1 = Transparent. On a colour image Director combines source and destination per channel (AND): white
+        // leaves what's underneath, dark pixels stay dark, so black text on white reads as text over the background.
+        // Habbo's ticket window draws its "Køb som gave" label this way (it showed as a white bar).
+        1 => {
+            let anded = (dst.0 & src.0, dst.1 & src.1, dst.2 & src.2);
+            blend_color_alpha(dst, anded, effective_alpha)
+        }
         // 0 = Copy (Director semantics: copy source over destination)
         // If fully opaque/effective_alpha==1 => hard copy, otherwise alpha-blend.
         0 => {
@@ -4518,6 +4525,14 @@ mod ink_colour_tests {
 
     const WHITE: (u8, u8, u8) = (255, 255, 255);
     const BLACK: (u8, u8, u8) = (0, 0, 0);
+
+    #[test]
+    fn transparent_ands_with_the_destination() {
+        // Ink 1 (Transparent): white keeps what's underneath, black stays black, colours combine per channel.
+        assert_eq!(blend_pixel((221, 221, 221), WHITE, 1, WHITE, BLACK, false, 1.0, 1.0), (221, 221, 221));
+        assert_eq!(blend_pixel((221, 221, 221), BLACK, 1, WHITE, BLACK, false, 1.0, 1.0), BLACK);
+        assert_eq!(blend_pixel((200, 100, 50), (255, 15, 255), 1, WHITE, BLACK, false, 1.0, 1.0), (200, 100 & 15, 50));
+    }
 
     #[test]
     fn lighten_adds_the_fore_colour() {

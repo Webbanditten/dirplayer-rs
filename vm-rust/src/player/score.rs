@@ -4790,6 +4790,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.flip_h = false;
                 }
+                sprite.has_flip_mod = sprite.flip_h || sprite.flip_v;
                 Ok(())
             },
         ),
@@ -4802,6 +4803,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.flip_v = false;
                 }
+                sprite.has_flip_mod = sprite.flip_h || sprite.flip_v;
                 Ok(())
             },
         ),
