@@ -91,6 +91,8 @@ function page(sso, forward, large) {
 
 function proxyAsset(req, res, assetPath) {
   const isVars = /^\/gamedata\/external_variables\.txt(\?|$)/.test(assetPath);
+  // SET_TEXTS=<file>: like SET_VARS below, for the external texts.
+  const isTexts = !!process.env.SET_TEXTS && /^\/gamedata\/external_texts\.txt(\?|$)/.test(assetPath);
   const target = new URL(ASSETS + (isVars && VARS_UPSTREAM ? VARS_UPSTREAM : assetPath));
   // LOCAL_ASSETS=<dir>: serve a file from that folder instead when its name matches the requested one
   // (try a rebuilt cast before uploading it).
@@ -103,6 +105,24 @@ function proxyAsset(req, res, assetPath) {
     }
   }
   const upstream = (target.protocol === 'http:' ? http : https).request(target, { method: 'GET', headers: { 'user-agent': 'habbo-dirplayer-dev', accept: '*/*' } }, up => {
+    if (isTexts && up.statusCode === 200) {
+      let body = '';
+      up.setEncoding('latin1');
+      up.on('data', c => (body += c));
+      up.on('end', () => {
+        const lines = body.split(/\r?\n/);
+        const set = fs.readFileSync(process.env.SET_TEXTS, 'latin1').split(/\r?\n/).filter(l => l.includes('=') && !l.startsWith('#'));
+        for (const s of set) {
+          const key = s.slice(0, s.indexOf('=') + 1);
+          const i = lines.findIndex(l => l.startsWith(key));
+          if (i >= 0) lines[i] = s; else lines.push(s);
+        }
+        res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+        res.end(Buffer.from(lines.join('\n'), 'latin1'));
+        log('texts', target.pathname, '(set ' + set.map(s => s.split('=')[0]).join(',') + ')');
+      });
+      return;
+    }
     if (isVars && up.statusCode === 200) {
       let body = '';
       up.setEncoding('latin1');
