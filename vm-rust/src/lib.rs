@@ -905,6 +905,24 @@ pub fn key_down(key: String, code: u16) {
     player_dispatch(PlayerVMCommand::KeyDown(key, code));
 }
 
+/// Trim the tracked modifier keys to the state a mouse event reports
+/// (see `KeyboardManager::sync_modifiers`). State only; no events fire.
+#[wasm_bindgen]
+pub fn sync_modifier_keys(shift: bool, control: bool, meta: bool, alt: bool) {
+    reserve_player_mut(|player| {
+        player.keyboard_manager.sync_modifiers(shift, control, meta, alt);
+    });
+}
+
+/// Forget every held key (the page lost focus). State only; no keyUp events
+/// fire, as in Director when the projector window is deactivated.
+#[wasm_bindgen]
+pub fn release_all_keys() {
+    reserve_player_mut(|player| {
+        player.keyboard_manager.release_all();
+    });
+}
+
 #[wasm_bindgen]
 pub fn key_up(key: String, code: u16) {
     // Update keyboard state immediately so keyPressed() reflects

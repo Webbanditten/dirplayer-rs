@@ -1,0 +1,13 @@
+{
+  "name": "habbo-room-photographer",
+  "private": true,
+  "description": "Photographs Habbo rooms (no avatars, pets, chat or interface) with DirPlayer in headless Chromium.",
+  "main": "server.cjs",
+  "scripts": {
+    "start": "node server.cjs"
+  },
+  "dependencies": {
+    "playwright": "1.59.1",
+    "ws": "8.19.0"
+  }
+}

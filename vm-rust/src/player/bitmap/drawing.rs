@@ -141,6 +141,13 @@ fn blend_pixel(
     let effective_alpha = src_alpha * blend_alpha;
 
     match ink {
+        // 1 = Transparent. On a colour image Director combines source and destination per channel (AND): white
+        // leaves what's underneath, dark pixels stay dark, so black text on white reads as text over the background.
+        // Habbo's ticket window draws its "Køb som gave" label this way (it showed as a white bar).
+        1 => {
+            let anded = (dst.0 & src.0, dst.1 & src.1, dst.2 & src.2);
+            blend_color_alpha(dst, anded, effective_alpha)
+        }
         // 0 = Copy (Director semantics: copy source over destination)
         // If fully opaque/effective_alpha==1 => hard copy, otherwise alpha-blend.
         0 => {
@@ -422,9 +429,11 @@ impl Bitmap {
                             &own_palette,
                             self.original_bit_depth,
                         );
-                        let distance = (r as i32 - palette_color.0 as i32).abs()
-                            + (g as i32 - palette_color.1 as i32).abs()
-                            + (b as i32 - palette_color.2 as i32).abs();
+                        // Squared Euclidean, as `color.paletteIndex` uses. The L1 sum picked
+                        // (201,236,239) over white for (239,239,239).
+                        let distance = (r as i32 - palette_color.0 as i32).pow(2)
+                            + (g as i32 - palette_color.1 as i32).pow(2)
+                            + (b as i32 - palette_color.2 as i32).pow(2);
                         if distance < result_distance {
                             result_index = palette_idx;
                             result_distance = distance;
@@ -444,9 +453,11 @@ impl Bitmap {
                             &own_palette,
                             self.original_bit_depth,
                         );
-                        let distance = (r as i32 - palette_color.0 as i32).abs()
-                            + (g as i32 - palette_color.1 as i32).abs()
-                            + (b as i32 - palette_color.2 as i32).abs();
+                        // Squared Euclidean, as `color.paletteIndex` uses. The L1 sum picked
+                        // (201,236,239) over white for (239,239,239).
+                        let distance = (r as i32 - palette_color.0 as i32).pow(2)
+                            + (g as i32 - palette_color.1 as i32).pow(2)
+                            + (b as i32 - palette_color.2 as i32).pow(2);
                         if distance < result_distance {
                             result_index = idx;
                             result_distance = distance;
@@ -857,6 +868,35 @@ impl Bitmap {
     ) {
         if alpha == 0.0 {
             return;
+        }
+        // Opaque fill of an indexed image: every pixel gets the same index, so
+        // find it once and write it everywhere. set_pixel on an 8-bit image
+        // scans the whole palette for each pixel; Habbo's wall mask manager
+        // fills a 720x540 8-bit image for every window furni it registers, and
+        // that alone took ~350 ms per fill, freezing rooms with many windows
+        // ("Guldminen", 21 windows: 21 fills during room load, ~7 s).
+        if alpha == 1.0 && self.bit_depth <= 8 {
+            let (cx1, cy1) = (x1.max(0), y1.max(0));
+            let (cx2, cy2) = (x2.min(self.width as i32), y2.min(self.height as i32));
+            if cx1 >= cx2 || cy1 >= cy2 {
+                return;
+            }
+            self.set_pixel(cx1, cy1, color, palettes);
+            if let ColorRef::PaletteIndex(idx) = self.get_pixel_color_ref(cx1 as u16, cy1 as u16) {
+                if self.bit_depth == 8 {
+                    let w = self.width as usize;
+                    for y in cy1 as usize..cy2 as usize {
+                        self.data[y * w + cx1 as usize..y * w + cx2 as usize].fill(idx);
+                    }
+                } else {
+                    for y in cy1..cy2 {
+                        for x in cx1..cx2 {
+                            self.set_pixel_index(x, y, idx);
+                        }
+                    }
+                }
+                return;
+            }
         }
         for y in y1..y2 {
             for x in x1..x2 {
@@ -1830,7 +1870,10 @@ impl Bitmap {
         };
 
         let mask_image = param_list.get("maskImage");
-        let mask_image = mask_image.and_then(|x| x.to_mask_or_none());
+        // `#maskImage: VOID` means no mask (Habbo passes it for members without a matte).
+        let mask_image = mask_image
+            .filter(|x| !x.is_void())
+            .and_then(|x| x.to_mask_or_none());
 
         // Extract rotation parameter (defaults to 0.0 if not provided)
         let rotation = param_list
@@ -1957,11 +2000,30 @@ impl Bitmap {
         self.matte = None;
         self.mark_dirty();
 
+        // Same-depth, same-palette indexed copy: move the palette INDEX, as the
+        // rect copyPixels fast path does, instead of resolving to RGB and
+        // re-quantizing. A palette with duplicate colours otherwise changes the
+        // index of every pixel whose colour also appears at a lower index. Habbo
+        // mirrors each private-room floor tile with a quad copy and then calls
+        // createMatte(); its art uses index 0 only for the background and another
+        // index for the interior whites, so re-quantizing turned those whites into
+        // index 0, the matte punched holes through every other pixel, and the
+        // tile underneath showed through as dotted black lines on the floor.
+        let copy_indices = self.bit_depth <= 8
+            && src.bit_depth == self.bit_depth
+            && src.palette_ref == self.palette_ref
+            && !src.use_alpha;
+
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                // Solve b*u + c*v + d*u*v = (x - a.x, y - a.y) via Newton.
-                let px = x as f32 - a.0;
-                let py = y as f32 - a.1;
+                // Solve b*u + c*v + d*u*v = (x - a.x, y - a.y) via Newton, at the
+                // pixel's centre. Solving at its corner was off by one along any axis
+                // the quad runs backwards (a -90° rotation, a mirror): the first
+                // pixel landed on the far source edge and was clamped there, and the
+                // near source edge was never read. Habbo's dropdowns build their
+                // bottom border by rotating an edge piece -90°, so it went missing.
+                let px = x as f32 + 0.5 - a.0;
+                let py = y as f32 + 0.5 - a.1;
                 let mut u = 0.5_f32;
                 let mut v = 0.5_f32;
                 let mut converged = false;
@@ -2030,6 +2092,12 @@ impl Bitmap {
                 if sx < 0 || sx >= src.width as i32 || sy < 0 || sy >= src.height as i32 {
                     continue;
                 }
+                if copy_indices {
+                    if let ColorRef::PaletteIndex(i) = src.get_pixel_color_ref(sx as u16, sy as u16) {
+                        self.set_pixel_index(x, y, i);
+                        continue;
+                    }
+                }
                 let (r, g, bl, a) = src.get_pixel_color_with_alpha(palettes, sx as u16, sy as u16);
                 // Honor the source's per-pixel alpha for 32-bit useAlpha images,
                 // otherwise the rotated/warped blit paints the transparent
@@ -2054,9 +2122,14 @@ impl Bitmap {
         let _ = param_list; // ink/blend handling deferred — v1 = copy ink only.
     }
 
+    /// Bounds of `rect` after the sprite transform: rotation around the pivot, then (for skew ±180) the
+    /// y offset negated. That is the inverse of the per-pixel mapping in `copy_pixels_with_params`, so
+    /// Director's mirror trick (rotation 180 + skew 180) yields the horizontally mirrored rect instead of
+    /// a 180° rotated one, which put the rows below a bottom-registered sprite and drew nothing.
     fn calculate_rotated_bounding_box(
         rect: &IntRect,
         rotation_degrees: f64,
+        skew_flip: bool,
         pivot_x: i32,
         pivot_y: i32,
     ) -> IntRect {
@@ -2083,7 +2156,8 @@ impl Bitmap {
             let dy = y - pivot_y as f64;
             
             let rotated_x = pivot_x as f64 + (dx * cos_theta - dy * sin_theta);
-            let rotated_y = pivot_y as f64 + (dx * sin_theta + dy * cos_theta);
+            let rotated_dy = dx * sin_theta + dy * cos_theta;
+            let rotated_y = pivot_y as f64 + if skew_flip { -rotated_dy } else { rotated_dy };
             
             rotated_corners.push((rotated_x, rotated_y));
         }
@@ -2122,8 +2196,14 @@ impl Bitmap {
         }
     }
 
+    /// Same table as the WebGL2 renderer's `use_back_color`: the backColor takes part in colorize for 32-bit
+    /// ink 0 and for indexed bitmaps under ink 0, 8 (matte) and 9 (mask). Habbo's post-its are 8-bit, ink 8.
     fn uses_back_color(depth: u8, ink: u32) -> bool {
-        ink == 0 && (depth == 32 || depth <= 8)
+        match (depth, ink) {
+            (32, 0) => true,
+            (d, 0) | (d, 8) | (d, 9) if d <= 8 => true,
+            _ => false,
+        }
     }
 
     /// Copy pixels from src to self, respecting scaling, flipping, masks, blending, and rotation
@@ -2348,13 +2428,14 @@ impl Bitmap {
         // Director-style draw bounds (allow rotated overflow)
         // ----------------------------------------------------------
         let (draw_min_x, draw_max_x, draw_min_y, draw_max_y) =
-            if has_sprite_rotation {
+            if has_sprite_rotation || has_skew_flip {
                 if let (Some(orig_rect), Some(sprite)) =
                     (&params.original_dst_rect, params.sprite)
                 {
                     let expanded = Self::calculate_rotated_bounding_box(
                         orig_rect,
-                        params.rotation,
+                        if has_sprite_rotation { params.rotation } else { 0.0 },
+                        has_skew_flip,
                         sprite.loc_h,
                         sprite.loc_v,
                     );
@@ -2671,25 +2752,22 @@ impl Bitmap {
                 let src_f_x = src_left_f + (dst_x_idx + phase) * scale_x;
                 let src_f_y = src_top_f + (dst_y_idx + phase) * scale_y;
 
-                // Handle horizontal flip
-                let src_mapped_x = if flip_x {
-                    let rel = src_f_x - src_left_f;
-                    src_left_f + src_w - rel
+                // Flips mirror the integer sample index inside the source rect
+                // (left + right - 1 - i). Mirroring the float position instead
+                // (left + w - rel) sampled one past the far edge under the floor
+                // rule: at 1:1, rows 0 and 1 both read h-1 and source row 0 was
+                // never read. Habbo builds a dropdown's bottom corners by
+                // flipping the top ones (flipV), so the bottom border went missing.
+                let sx = if flip_x {
+                    src_rect.left + src_rect.right - 1 - src_f_x.floor() as i32
                 } else {
-                    src_f_x
+                    src_f_x.floor() as i32
                 };
-
-                // Handle vertical flip
-                let src_mapped_y = if flip_y {
-                    let rel = src_f_y - src_top_f;
-                    src_top_f + src_h - rel
+                let sy = if flip_y {
+                    src_rect.top + src_rect.bottom - 1 - src_f_y.floor() as i32
                 } else {
-                    src_f_y
+                    src_f_y.floor() as i32
                 };
-
-                // Convert to integer sample coordinates with flooring and clamping
-                let sx = src_mapped_x.floor() as i32;
-                let sy = src_mapped_y.floor() as i32;
 
                 let src_max_x = src_rect.right - 1;
                 let src_max_y = src_rect.bottom - 1;
@@ -2715,6 +2793,30 @@ impl Bitmap {
                         let my = (sy as i32 - params.mask_offset.1).max(0) as u16;
                         if !mask.get_bit(mx, my) {
                             continue; // Edge-connected background pixel - skip
+                        }
+                    }
+
+                    // Indexed into indexed, same depth AND same palette, plain copy:
+                    // keep the index. Going through RGB and back picks the lowest index
+                    // of a colour the palette lists twice. Habbo mirrors private-room
+                    // floor tiles (a flipped quad, which arrives here as a flipped rect)
+                    // and then calls createMatte(); the tile art uses index 0 only for
+                    // the background and a duplicate white inside, so re-quantising
+                    // punched matte holes and the tiles below showed as grid lines.
+                    // Different palettes still remap through RGB, as Director does: the
+                    // grey button pieces (interface palette, index 129) copied into a
+                    // Sound_System Palette image must stay grey, and index 129 there is black.
+                    if self.bit_depth == src.bit_depth
+                        && src.palette_ref == self.palette_ref
+                        && alpha >= 0.999
+                        && !params.is_text_rendering
+                        && !(params.sprite.map_or(false, |sp| sp.has_fore_color || sp.has_back_color)
+                            || params.bg_color_explicit
+                            || params.fore_color_explicit)
+                    {
+                        if let ColorRef::PaletteIndex(i) = src.get_pixel_color_ref(sx, sy) {
+                            self.set_pixel_index(dst_x, dst_y, i);
+                            continue;
                         }
                     }
 
@@ -2854,6 +2956,15 @@ impl Bitmap {
                         continue; // transparent - RGB matches background color
                     }
 
+                    // Director tints before it keys: with an explicit `#bgColor` white becomes
+                    // that colour and drops out with it. Habbo draws avatar eyes ("ey") with
+                    // ink 36; after a figure change (changePartData) their bgColor is the eye
+                    // colour, and keyed on the raw pixel the eye image's white background was
+                    // copied into the avatar, which its ink 36 sprite then showed as a hole.
+                    if (r, g, b) == (255, 255, 255) && params.bg_color_explicit && ink == 36 {
+                        continue;
+                    }
+
                     // If alpha channel disabled → fully opaque
                     let src_alpha = 1.0;
 
@@ -2919,6 +3030,21 @@ impl Bitmap {
 
                     // Skip pixel if it matches the sprite's bgColor (transparent background)
                     if (r, g, b) == bg_color_resolved {
+                        continue;
+                    }
+
+                    // copyPixels with an explicit `#bgColor`: white is tinted to it and keyed
+                    // (see the indexed ink 36 path).
+                    if (r, g, b) == (255, 255, 255) && params.bg_color_explicit && ink == 36 {
+                        continue;
+                    }
+
+                    // A sprite with both foreColor and bgColor set tints white to bgColor
+                    // before the key, so white drops out too (as in the WebGL2 renderer).
+                    // Habbo's window text: white-backed image, foreColor white, bgColor black.
+                    if (r, g, b) == (255, 255, 255)
+                        && params.sprite.map_or(false, |s| s.has_fore_color && s.has_back_color)
+                    {
                         continue;
                     }
 
@@ -3041,8 +3167,20 @@ impl Bitmap {
                     // foreColor so the gray pattern reads as a darker shade of
                     // the wall colour, not as a desaturating gray smear.
                     let sprite_fg = params.sprite.map_or(false, |sp| sp.has_fore_color);
+                    let sprite_bg = params.sprite.map_or(false, |sp| sp.has_back_color);
                     let has_fg = sprite_fg || params.fore_color_explicit;
-                    if has_fg && fg_color_resolved != (0, 0, 0) {
+                    if params.sprite.is_some() && (sprite_fg || sprite_bg) {
+                        // Sprites (the CPU renderer) colorize like the WebGL2 renderer: black takes
+                        // the foreColor, white the backColor, per channel by the pixel's colour.
+                        // Habbo's post-its are ink 8 with bgColor = the note colour; without the
+                        // backColor they rendered white.
+                        let eff_fg = if sprite_fg { fg_color_resolved } else { (0u8, 0u8, 0u8) };
+                        let eff_bg = if sprite_bg { bg_color_resolved } else { (255u8, 255u8, 255u8) };
+                        let mix = |lo: u8, hi: u8, s: u8| -> u8 {
+                            ((lo as u16 * (255 - s as u16) + hi as u16 * s as u16) / 255) as u8
+                        };
+                        src_color = (mix(eff_fg.0, eff_bg.0, sr), mix(eff_fg.1, eff_bg.1, sg), mix(eff_fg.2, eff_bg.2, sb));
+                    } else if has_fg && fg_color_resolved != (0, 0, 0) {
                         src_color = Self::apply_forecolor_tint(src_color, fg_color_resolved);
                     }
 
@@ -3188,8 +3326,11 @@ impl Bitmap {
                 // Studios' chat renderer does the latter to tint `cc.bubble.left`
                 // with the avatar chest color via
                 //   bubblename.copyPixels(sourceimg, ..., [#bgColor: cColor])
-                let sprite_fg = params.sprite.map_or(false, |sp| sp.has_fore_color);
-                let sprite_bg = params.sprite.map_or(false, |sp| sp.has_back_color);
+                // Habbo fork: a sprite's colours don't tint a 32-bit bitmap (the WebGL2 renderer's
+                // `sprite_tints_32bit`); explicit copyPixels #color/#bgColor still do.
+                let sprite_tints = src.original_bit_depth != 32 || params.is_text_rendering;
+                let sprite_fg = sprite_tints && params.sprite.map_or(false, |sp| sp.has_fore_color);
+                let sprite_bg = sprite_tints && params.sprite.map_or(false, |sp| sp.has_back_color);
                 let has_fg = sprite_fg || params.fore_color_explicit;
                 let has_bg = sprite_bg || params.bg_color_explicit;
                 if (has_fg || has_bg)
@@ -3227,21 +3368,39 @@ impl Bitmap {
 
                         // ---------- INDEXED (≤8-bit) ----------
                         _ => {
-                            // Palette index based semantics
                             let color_ref = src.get_pixel_color_ref(sx, sy);
 
                             if let ColorRef::PaletteIndex(i) = color_ref {
-                                let max = (1 << src.original_bit_depth) - 1;
-                                let t = i as f32 / max as f32;
-
-                                if has_fg && has_bg && Self::uses_back_color(src.original_bit_depth, ink) {
+                                // Director maps black to the foreColor and white to the backColor,
+                                // blending each channel by the pixel's own palette colour:
+                                // out.c = mix(fg.c, bg.c, src.c), as the WebGL2 renderer does. The
+                                // palette index is not a brightness: on #systemMac (index 0 white,
+                                // 255 black) an index ramp ran backwards, and with only ink 0
+                                // allowed the backColor, Habbo's post-its (ink 8, bgColor = note
+                                // colour) stayed white. Only for sprites (the CPU renderer), like the
+                                // WebGL2 rule; Lingo copyPixels keeps its previous behaviour.
+                                if params.sprite.is_some()
+                                    && (has_fg || has_bg)
+                                    && Self::uses_back_color(src.original_bit_depth, ink)
+                                {
+                                    let eff_fg = if has_fg { fg_color_resolved } else { (0u8, 0u8, 0u8) };
+                                    let eff_bg = if has_bg { bg_color_resolved } else { (255u8, 255u8, 255u8) };
+                                    let mix = |lo: u8, hi: u8, s: u8| -> u8 {
+                                        ((lo as u16 * (255 - s as u16) + hi as u16 * s as u16) / 255) as u8
+                                    };
+                                    src_color = (mix(eff_fg.0, eff_bg.0, sr), mix(eff_fg.1, eff_bg.1, sg), mix(eff_fg.2, eff_bg.2, sb));
+                                } else if params.sprite.is_none()
+                                    && has_fg
+                                    && has_bg
+                                    && ink == 0
+                                {
+                                    // Lingo copyPixels: unchanged palette-index ramp (ink 0 only).
+                                    let max = (1 << src.original_bit_depth) - 1;
+                                    let t = i as f32 / max as f32;
                                     src_color = (
-                                        ((1.0 - t) * fg_color_resolved.0 as f32
-                                            + t * bg_color_resolved.0 as f32) as u8,
-                                        ((1.0 - t) * fg_color_resolved.1 as f32
-                                            + t * bg_color_resolved.1 as f32) as u8,
-                                        ((1.0 - t) * fg_color_resolved.2 as f32
-                                            + t * bg_color_resolved.2 as f32) as u8,
+                                        ((1.0 - t) * fg_color_resolved.0 as f32 + t * bg_color_resolved.0 as f32) as u8,
+                                        ((1.0 - t) * fg_color_resolved.1 as f32 + t * bg_color_resolved.1 as f32) as u8,
+                                        ((1.0 - t) * fg_color_resolved.2 as f32 + t * bg_color_resolved.2 as f32) as u8,
                                     );
                                 } else if has_fg && i == 0 {
                                     src_color = fg_color_resolved;
@@ -3335,6 +3494,20 @@ impl Bitmap {
                     && (sr, sg, sb) == bg_color_resolved
                 {
                     continue; // This pixel is background → transparent
+                }
+
+                // Add Pin / Sub Pin on sprites: the bitmap's white background is transparent even
+                // with a coloured bgColor, as in the WebGL2 renderer. Director colorizes an indexed
+                // bitmap first (white -> bgColor) and then keys the bgColor; comparing the raw white
+                // against a coloured bgColor drew it additively instead. Habbo sets the furni part
+                // colour as bgColor on the ink-33 loading placeholder, which showed a white square.
+                if (ink == 33 || ink == 35)
+                    && params.sprite.is_some()
+                    && !params.is_text_rendering
+                    && !src.use_alpha
+                    && (sr, sg, sb) == (255, 255, 255)
+                {
+                    continue;
                 }
 
                 // ----------------------------------------------------------
@@ -4352,6 +4525,14 @@ mod ink_colour_tests {
 
     const WHITE: (u8, u8, u8) = (255, 255, 255);
     const BLACK: (u8, u8, u8) = (0, 0, 0);
+
+    #[test]
+    fn transparent_ands_with_the_destination() {
+        // Ink 1 (Transparent): white keeps what's underneath, black stays black, colours combine per channel.
+        assert_eq!(blend_pixel((221, 221, 221), WHITE, 1, WHITE, BLACK, false, 1.0, 1.0), (221, 221, 221));
+        assert_eq!(blend_pixel((221, 221, 221), BLACK, 1, WHITE, BLACK, false, 1.0, 1.0), BLACK);
+        assert_eq!(blend_pixel((200, 100, 50), (255, 15, 255), 1, WHITE, BLACK, false, 1.0, 1.0), (200, 100 & 15, 50));
+    }
 
     #[test]
     fn lighten_adds_the_fore_colour() {

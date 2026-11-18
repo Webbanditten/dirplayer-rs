@@ -104,6 +104,34 @@ impl MultiuserXtraInstance {
     }
 }
 
+/// Director destroys an xtra instance when the last reference to it goes away, which closes its connection.
+/// DirPlayer has no such finalizer, so a dropped instance would keep its socket open. Habbo's fuse client hits
+/// this on every SSO login: `Login Component.initB` calls `openConnection` twice, and the second
+/// `Connection Instance.connect` replaces `pXtra` with a new `xtra("Multiuser")` instance; the first socket
+/// then sat idle until the server timed it out. Called when an instance connects: any other connected
+/// instance that no live datum refers to any more is removed, which drops its sender and closes its socket.
+fn release_unreferenced_connections(keep: u32) {
+    let referenced: fxhash::FxHashSet<u32> = reserve_player_ref(|player| {
+        player
+            .allocator
+            .datums
+            .iter()
+            .filter_map(|(_, entry)| match &entry.datum {
+                Datum::XtraInstance(name, id) if name.eq_ignore_ascii_case("multiuser") => Some(*id),
+                _ => None,
+            })
+            .collect()
+    });
+    let Some(manager) = (unsafe { MULTIUSER_XTRA_MANAGER_OPT.as_mut() }) else { return };
+    manager.instances.retain(|id, instance| {
+        let release = *id != keep && instance.socket_tx.is_some() && !referenced.contains(id);
+        if release {
+            multiuser_log!("Multiuser: closing connection of instance {} (no longer referenced)", id);
+        }
+        !release
+    });
+}
+
 pub struct MultiuserXtraManager {
     pub instances: FxHashMap<u32, MultiuserXtraInstance>,
     pub instance_counter: u32,
@@ -167,6 +195,7 @@ impl MultiuserXtraManager {
                 })
             }
             "connecttonetserver" => {
+                release_unreferenced_connections(instance_id);
                 let mut multiusr_manager = unsafe { MULTIUSER_XTRA_MANAGER_OPT.as_mut().unwrap() };
                 let instance = multiusr_manager.instances.get_mut(&instance_id).unwrap();
                 if let Some((handler_obj_ref, handler_symbol)) = &instance.net_message_handler {
@@ -488,6 +517,9 @@ impl MultiuserXtraManager {
                             multiuser_log!("Multiuser: Failed to send message: {:?}", e);
                         }
                     }
+                    // The sender was dropped (breakConnection, or the instance was released):
+                    // close the socket. The browser keeps an open WebSocket alive on its own.
+                    let _ = socket_clone.close();
                 });
 
                 // Forget the callbacks to keep them alive
@@ -576,7 +608,22 @@ impl MultiuserXtraManager {
                                 // each char to a byte (`c as u8`) silently mangled
                                 // anything outside Latin-1 and disagreed with what the
                                 // server sends back.
-                                s.into_bytes()
+                                //
+                                // A movie authored before Director 11 has no Unicode:
+                                // Shockwave sends its strings as single-byte Windows-1252,
+                                // and servers for those clients (Habbo v1x/Kepler/Odin:
+                                // ISO-8859-1 on the wire) expect exactly that. Sending
+                                // UTF-8 there broke every non-ASCII string; a Danish hotel
+                                // requested catalogue page "SjÃ¦lden ting" instead of
+                                // "Sjælden ting" and never got an answer. The receive side
+                                // already falls back to Windows-1252 for such servers.
+                                if player.movie.dir_version > 0 && player.movie.dir_version < 1100 {
+                                    s.chars()
+                                        .map(|c| crate::io::encoding::char_to_win1252_byte(c).unwrap_or(b'?'))
+                                        .collect()
+                                } else {
+                                    s.into_bytes()
+                                }
                             }
                             MultiuserConnectionMode::Binary => {
                                 let subject = player.get_datum(args.get(1).unwrap()).string_value()?;

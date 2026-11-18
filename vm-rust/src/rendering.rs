@@ -339,6 +339,10 @@ pub struct PlayerCanvasRenderer {
     pub debug_selected_channel_num: Option<i16>,
     pub bitmap: Bitmap,
     native_cursor_cache: crate::cursor::NativeCursorCache,
+    /// Movie-size canvas the frame is put on before it is drawn scaled into
+    /// drawRect (`put_image_data` can't scale). Only used while drawRect differs
+    /// from the movie rect, e.g. Habbo's 2x large client.
+    scale_source: Option<(web_sys::HtmlCanvasElement, web_sys::CanvasRenderingContext2d)>,
 }
 
 pub(crate) fn get_or_load_font(
@@ -3556,6 +3560,7 @@ impl PlayerCanvasRenderer {
             }
         }
 
+        let (frame_w, frame_h) = (bitmap.width as u32, bitmap.height as u32);
         let slice_data = Clamped(bitmap.data.as_slice());
         let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
             slice_data,
@@ -3563,7 +3568,35 @@ impl PlayerCanvasRenderer {
             bitmap.height.into(),
         );
         self.ctx2d.set_fill_style(&safe_js_string("white"));
+        // The frame is rendered at movie size. When drawRect scales the movie
+        // (Habbo's large client sets 2x), draw it into drawRect: the mouse mapping
+        // (canvas_to_movie_coords) already assumes that placement. Without this the
+        // 2x client drew at 1x in the canvas's top-left quarter.
+        let (sx, sy) = crate::player::stage::stage_scale(player);
+        let draw_rect = crate::player::stage::stage_layout(player).draw_rect;
+        let scaled = (sx - 1.0).abs() > 1e-6 || (sy - 1.0).abs() > 1e-6;
         match image_data {
+            Ok(image_data) if scaled => {
+                let stale = self
+                    .scale_source
+                    .as_ref()
+                    .map_or(true, |(c, _)| c.width() != frame_w || c.height() != frame_h);
+                if stale {
+                    self.scale_source = create_scale_source(frame_w, frame_h);
+                }
+                if let Some((src_canvas, src_ctx)) = &self.scale_source {
+                    let _ = src_ctx.put_image_data(&image_data, 0.0, 0.0);
+                    // Resizing the canvas resets this, so set it every frame.
+                    self.ctx2d.set_image_smoothing_enabled(false);
+                    let _ = self.ctx2d.draw_image_with_html_canvas_element_and_dw_and_dh(
+                        src_canvas,
+                        draw_rect[0],
+                        draw_rect[1],
+                        frame_w as f64 * sx,
+                        frame_h as f64 * sy,
+                    );
+                }
+            }
             Ok(image_data) => {
                 self.ctx2d.put_image_data(&image_data, 0.0, 0.0).unwrap();
             }
@@ -3902,6 +3935,27 @@ fn set_pixelated_canvas_style(canvas: &web_sys::HtmlCanvasElement) {
     style.set_property("backface-visibility", "hidden").unwrap_or(());
 }
 
+/// A detached movie-size canvas for `PlayerCanvasRenderer::scale_source`.
+fn create_scale_source(
+    width: u32,
+    height: u32,
+) -> Option<(web_sys::HtmlCanvasElement, web_sys::CanvasRenderingContext2d)> {
+    let canvas = web_sys::window()?
+        .document()?
+        .create_element("canvas")
+        .ok()?
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .ok()?;
+    canvas.set_width(width);
+    canvas.set_height(height);
+    let ctx = canvas
+        .get_context("2d")
+        .ok()??
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()
+        .ok()?;
+    Some((canvas, ctx))
+}
+
 /// Create a Canvas2D renderer (fallback)
 pub(crate) fn create_canvas2d_renderer(
     canvas_size: (u32, u32),
@@ -3972,6 +4026,7 @@ pub(crate) fn create_canvas2d_renderer(
             PaletteRef::BuiltIn(get_system_default_palette()),
         ),
         native_cursor_cache: None,
+        scale_source: None,
     }
 }
 

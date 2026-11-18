@@ -1288,6 +1288,16 @@ pub fn resolve_color_ref(
                             member_ref.cast_member as u32,
                         );
                         palettes.get(slot_number as usize)
+                            // A stale clutId one below its palette: when members were moved after authoring, the
+                            // bitmaps kept pointing at the member just before their palette (Habbo's
+                            // ctlg_dyndeal_* badges point at hh_cat_gfx_all #32, a bitmap; their palette
+                            // "ctlg_dyndeal_background Palette" is #33, which is also what Director exports them
+                            // with). Prefer that neighbour in the same cast over a same-numbered palette in an
+                            // unrelated cast (hh_soundmachine's #32 drew them black).
+                            .or_else(|| palettes.get(CastMemberRefHandlers::get_cast_slot_number(
+                                member_ref.cast_lib as u32,
+                                member_ref.cast_member as u32 + 1,
+                            ) as usize))
                             .or_else(|| palettes.find_by_member(member_ref.cast_member as u32))
                     };
                     if let Some(member) = palette_member {
@@ -1376,7 +1386,7 @@ impl PaletteQuantizer {
         self.table.is_empty()
     }
 
-    /// Nearest entry to `(r, g, b)` by the L1 channel distance, over the first
+    /// Nearest entry to `(r, g, b)` by squared Euclidean distance, over the first
     /// `limit` entries. Ties go to the lowest index, matching the `<` in the
     /// scan this replaces.
     #[inline]
@@ -1408,9 +1418,12 @@ impl PaletteQuantizer {
         let mut result_index: u8 = 0;
         let mut result_distance = i32::MAX;
         for (idx, &(pr, pg, pb)) in table.iter().enumerate().take(limit) {
-            let distance = (r as i32 - pr as i32).abs()
-                + (g as i32 - pg as i32).abs()
-                + (b as i32 - pb as i32).abs();
+            // Squared Euclidean, as `color.paletteIndex` uses. The L1 sum picked
+            // (201,236,239) over white for (239,239,239), which turned Habbo's
+            // grey buttons cyan when they were copied into the sound machine's palette.
+            let distance = (r as i32 - pr as i32).pow(2)
+                + (g as i32 - pg as i32).pow(2)
+                + (b as i32 - pb as i32).pow(2);
             if distance < result_distance {
                 result_index = idx as u8;
                 result_distance = distance;

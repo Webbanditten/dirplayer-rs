@@ -70,6 +70,27 @@ impl KeyboardManager {
         self.down_keys.retain(|x| x.code != code_to_remove);
     }
 
+    /// Drop modifier keys the browser reports as released. A modifier's key-up
+    /// never reaches the page when it is released while another window has focus
+    /// (macOS Cmd+Shift+4 screenshots, Cmd+Tab), so `the shiftDown` would stay true
+    /// for good. Every mouse event carries the real modifier state; this trims
+    /// the tracked keys to it.
+    pub fn sync_modifiers(&mut self, shift: bool, control: bool, meta: bool, alt: bool) {
+        self.down_keys.retain(|k| match k.key.as_str() {
+            "Shift" => shift,
+            "Control" => control,
+            "Meta" => meta,
+            "Alt" | "AltGraph" => alt,
+            _ => true,
+        });
+    }
+
+    /// Release every key, for when the page loses focus: no key-up events
+    /// arrive until it has focus again.
+    pub fn release_all(&mut self) {
+        self.down_keys.clear();
+    }
+
     pub fn is_key_down(&self, key: &str) -> bool {
         self.down_keys.iter().any(|x| x.key == key)
     }

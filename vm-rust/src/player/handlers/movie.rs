@@ -1006,13 +1006,16 @@ impl MovieHandlers {
         }
         let (url, target) = reserve_player_ref(|player| {
             let url = player.get_datum(&args[0]).string_value()?;
-            let target = if args.len() > 1 {
-                player
-                    .get_datum(&args[1])
-                    .string_value()
-                    .unwrap_or_else(|_| "_blank".to_string())
-            } else {
-                "_blank".to_string()
+            // Director: "If targetName is omitted, the new page replaces the current
+            // page containing the movie." Habbo's openNetPage passes VOID for its
+            // "self" target (logout -> url_logout_timeout, hotel links); opening a
+            // new tab there left the dead client behind.
+            let target = match args.get(1).map(|a| player.get_datum(a)) {
+                None | Some(Datum::Void) => "_self".to_string(),
+                Some(d) => match d.string_value() {
+                    Ok(t) if !t.is_empty() => t,
+                    _ => "_self".to_string(),
+                },
             };
             Ok::<(String, String), ScriptError>((url, target))
         })?;

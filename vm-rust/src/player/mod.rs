@@ -683,6 +683,8 @@ pub struct DirPlayer {
     /// Lives on the Player rather than the Movie so it outlives a movie load,
     /// which is precisely what that Xtra promises.
     pub env_overrides: EnvOverrides,
+    /// `the displayTemplate`, created on first read so scripts that tweak it keep their changes.
+    pub display_template: Option<DatumRef>,
     pub console: console::ConsoleBuffer,
 }
 
@@ -886,6 +888,7 @@ impl DirPlayer {
             startup_do_before: None,
             startup_go: None,
             env_overrides: EnvOverrides::default(),
+            display_template: None,
             console: console::ConsoleBuffer::new(),
             rng: rand::rngs::SmallRng::seed_from_u64(0),
         };
@@ -3362,11 +3365,75 @@ impl DirPlayer {
                 };
                 Ok(self.alloc_datum(Datum::Int(value as i32)))
             },
+            // `the displayTemplate` (Director 11+ Movie property): a property list of the default
+            // settings for new movie-in-a-window windows, which scripts read and adjust before
+            // opening a window. dirplayer has no MIAWs, but movies still read it at startup (the
+            // Habbo client does), and reading an unknown property aborted the whole start-up handler.
+            // Return one persistent list with the Director defaults, so edits stick, like Director's.
+            BuiltInSymbol::DisplayTemplate => {
+                if let Some(existing) = &self.display_template {
+                    return Ok(existing.clone());
+                }
+                let template = self.default_display_template();
+                self.display_template = Some(template.clone());
+                Ok(template)
+            }
             _ => {
                 let datum = self.movie.get_prop(prop)?;
                 Ok(self.alloc_datum(datum))
             }
         }
+    }
+
+    /// Director's default `the displayTemplate` property list.
+    fn default_display_template(&mut self) -> DatumRef {
+        fn sym(player: &mut DirPlayer, name: &str) -> DatumRef {
+            player.alloc_datum(Datum::Symbol(Symbol::from_str(name)))
+        }
+        fn plist(player: &mut DirPlayer, entries: Vec<(&str, Datum)>) -> DatumRef {
+            let pairs: VecDeque<(DatumRef, DatumRef)> = entries
+                .into_iter()
+                .map(|(key, value)| (sym(player, key), player.alloc_datum(value)))
+                .collect();
+            player.alloc_datum(Datum::PropList(pairs, false))
+        }
+        let titlebar = plist(self, vec![
+            ("visible", Datum::Int(1)),
+            ("icon", Datum::Void),
+            ("closebox", Datum::Int(1)),
+            ("minimizebox", Datum::Int(1)),
+            ("maximizebox", Datum::Int(1)),
+            ("sideTitlebar", Datum::Int(0)),
+        ]);
+        let border = sym(self, "line");
+        let border = self.get_datum(&border).clone();
+        let appearance = plist(self, vec![
+            ("mask", Datum::Void),
+            ("border", border),
+            ("metal", Datum::Int(0)),
+            ("shadow", Datum::Int(1)),
+            ("liveresize", Datum::Int(0)),
+        ]);
+        let window_type = sym(self, "document");
+        let window_type = self.get_datum(&window_type).clone();
+        let mut pairs: VecDeque<(DatumRef, DatumRef)> = VecDeque::new();
+        for (key, value) in [
+            ("title", Datum::String(String::new())),
+            ("resizable", Datum::Int(1)),
+            ("dockingEnabled", Datum::Int(0)),
+            ("systemTrayIcon", Datum::Int(0)),
+            ("systemTrayTooltip", Datum::String(String::new())),
+            ("type", window_type),
+        ] {
+            let k = sym(self, key);
+            let v = self.alloc_datum(value);
+            pairs.push_back((k, v));
+        }
+        let k = sym(self, "titlebarOptions");
+        pairs.push_back((k, titlebar));
+        let k = sym(self, "appearanceOptions");
+        pairs.push_back((k, appearance));
+        self.alloc_datum(Datum::PropList(pairs, false))
     }
 
     fn get_player_prop(&mut self, prop: Symbol) -> Result<DatumRef, ScriptError> {
@@ -3585,6 +3652,11 @@ impl DirPlayer {
 
     pub(crate) fn set_movie_prop(&mut self, prop: Symbol, value: Datum) -> Result<(), ScriptError> {
         match prop.into_builtin() {
+            Some(BuiltInSymbol::DisplayTemplate) => {
+                let template = self.alloc_datum(value);
+                self.display_template = Some(template);
+                Ok(())
+            }
             // LeechProtectionRemovalHelp `forceTheExitLock` — "force", not
             // "set": the write is swallowed so a leech check that re-asserts
             // `the exitLock` before testing it can't undo the fake. Director
@@ -3725,7 +3797,12 @@ impl DirPlayer {
         // intact at this point, so dump them.
         crate::console_error!("{}", self.format_scope_stack(5, 25));
         warn!("[!!] play failed with error: {}", err.message);
-        self.stop();
+        // Embedded without the debugger (break-on-error off), keep playing like Shockwave: the
+        // failing handler is already unwound. Stopping froze the whole client on one error
+        // (Habbo: a room whose furni raised one never finished loading).
+        if self.break_on_error {
+            self.stop();
+        }
 
         // Dispatch debug update with full call stack (scopes are preserved on error)
         JsApi::dispatch_debug_update(self);
@@ -5007,6 +5084,11 @@ pub async fn player_call_script_handler_raw_args(
             Err(err) => {
                 // abort is flow control, not a real error - skip break-on-error
                 if err.code != ScriptErrorCode::Abort {
+                    // Say where it happened before the frames unwind: the error reaches JS as a
+                    // bare message, and with break-on-error off nothing else records the handler.
+                    reserve_player_ref(|player| {
+                        crate::console_error!("[!!] script error: {}\n{}", err.message, player.format_scope_stack(5, 25));
+                    });
                     let should_break = reserve_player_ref(|player| player.break_on_error);
                     if should_break {
                         let (current_script_ref, current_bytecode_idx) = reserve_player_ref(|player| {
@@ -5070,6 +5152,11 @@ pub async fn player_call_script_handler_raw_args(
             HandlerExecutionResult::Error(err) => {
                 // abort is flow control, not a real error - skip break-on-error
                 if err.code != ScriptErrorCode::Abort {
+                    // Say where it happened before the frames unwind: the error reaches JS as a
+                    // bare message, and with break-on-error off nothing else records the handler.
+                    reserve_player_ref(|player| {
+                        crate::console_error!("[!!] script error: {}\n{}", err.message, player.format_scope_stack(5, 25));
+                    });
                     let should_break = reserve_player_ref(|player| player.break_on_error);
                     if should_break {
                         let (current_script_ref, current_bytecode_idx) = reserve_player_ref(|player| {
