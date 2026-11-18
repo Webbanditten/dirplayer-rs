@@ -94,8 +94,11 @@ async function takePhoto(job) {
   try {
     await page.addInitScript(() => { window.alert = (m) => console.error('alert: ' + m); });
     const forward = (job.roomType === 'public' ? 'public' : 'private') + ',' + job.roomId;
+    const t0 = Date.now();
+    const step = (what) => log(`job ${job.id}: ${what} after ${Date.now() - t0} ms`);
     await page.goto(`http://127.0.0.1:${HARNESS_PORT}/?sso=${encodeURIComponent(job.sso)}&forward=${forward}`);
     await page.waitForFunction(() => window.__vm && window.__vm.mcp_eval_lingo, null, { timeout: 60000 });
+    step('client started');
     // The movie's mouse starts at the stage's top-left and only moves with pointer events on the canvas. Park it far
     // outside the stage, so the room's tile highlighter (it follows the mouse) never shows.
     const mouseAway = () => page.evaluate(() => window.__vm.mouse_move && window.__vm.mouse_move(-10000, -10000));
@@ -123,6 +126,7 @@ async function takePhoto(job) {
       last = count;
       if (stable >= 3) break;
     }
+    step('room loaded');
     await sleep(1500); // the last furni's first frame
 
     // Keep the room's sprites (visualizer and its wrapped wall/floor parts) and every furni's; hide everything else
@@ -146,6 +150,21 @@ async function takePhoto(job) {
       nums(await ev('string(' + V + '.getSprById("hiliter"))')).forEach((x) => keep.delete(x));
       return keep;
     };
+    // Hiding the other channels runs inside the page: one round trip per pass instead of one per channel (on prod's
+    // CPU 1000 round trips took a minute, and a room where something keeps showing itself again ran all five passes).
+    const hideOthers = (keepList) => page.evaluate(async (keepArr) => {
+      const keepSet = new Set(keepArr);
+      const lingo = async (c) => { const r = JSON.parse(await window.__vm.mcp_eval_lingo(c)); return r.success ? String(r.result_value) : ''; };
+      let hidden = 0;
+      for (let channel = 1; channel <= 1000; channel++) {
+        if (keepSet.has(channel)) continue;
+        if ((await lingo('sprite(' + channel + ').visible')) === '1') {
+          await lingo('sprite(' + channel + ').visible = 0');
+          hidden++;
+        }
+      }
+      return hidden;
+    }, [...keepList]);
     await mouseAway();
     let keep = new Set();
     for (let pass = 0; pass < 5; pass++) {
@@ -155,14 +174,8 @@ async function takePhoto(job) {
         nums(await ev('string(getWindow("' + safe + '").pSpriteList)')).forEach((n) => keep.delete(n));
         await ev('getWindow("' + safe + '").hide()');
       }
-      let hidden = 0;
-      for (let channel = 1; channel <= 1000; channel++) {
-        if (keep.has(channel)) continue;
-        if ((await ev('sprite(' + channel + ').visible')) === '1') {
-          await ev('sprite(' + channel + ').visible = 0');
-          hidden++;
-        }
-      }
+      const hidden = await hideOthers(keep);
+      step(`hide pass ${pass + 1}: ${hidden} sprites hidden`);
       await sleep(700);
       if (pass > 0 && hidden === 0) break;
     }
