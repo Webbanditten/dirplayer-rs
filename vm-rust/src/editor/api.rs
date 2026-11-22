@@ -24,6 +24,17 @@ impl CastDocument {
         CastDoc::open(bytes).map(|doc| CastDocument { doc }).map_err(err)
     }
 
+    /// A copy of the document as it is now, independent of it (the editor's undo steps).
+    pub fn snapshot(&self) -> CastDocument {
+        CastDocument { doc: self.doc.clone() }
+    }
+
+    /// Bytes held by the document's resources (to keep the undo history's memory in bounds).
+    #[wasm_bindgen(js_name = byteSize)]
+    pub fn byte_size(&self) -> u32 {
+        self.doc.file.resources.values().map(|r| r.data.len() as u32).sum()
+    }
+
     /// `[{slot, type, name, bitmap?: {width, height, regX, regY, depth, paletteId, clutCastLib, useAlpha}, media}]`
     #[wasm_bindgen(js_name = membersJson)]
     pub fn members_json(&self) -> String {

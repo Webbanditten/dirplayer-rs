@@ -16,7 +16,7 @@ interface Props {
   alias?: string;
   importMode: ImportMode;
   setImportMode: (m: ImportMode) => void;
-  edit: (what: string, fn: () => void) => void;
+  edit: (what: string, fn: () => void, opts?: { group?: string }) => void;
   onImport: (slot: number) => void;
   onExport: (slot: number) => void;
   onDuplicate: (slot: number) => void;
@@ -56,7 +56,7 @@ function BitmapEditor({ doc, member, rev, edit }: { doc: CastDocument; member: M
     ctx.stroke();
   }, [doc, member, rev, zoom, h]);
 
-  const setReg = (x: number, y: number) => edit(`Registration point ${x}, ${y}`, () => doc.setRegPoint(member.slot, x, y));
+  const setReg = (x: number, y: number) => edit(`Registration point ${x}, ${y}`, () => doc.setRegPoint(member.slot, x, y), { group: `reg:${member.slot}` });
 
   return (
     <div className="bitmap-editor">

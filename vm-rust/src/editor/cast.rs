@@ -376,6 +376,24 @@ pub struct CastDoc {
     bitmaps: RefCell<HashMap<u32, Rc<RefCell<Bitmap>>>>,
 }
 
+/// A copy that shares nothing with the original: the decoded-bitmap cache starts empty (it only caches reads, every
+/// change is written to the resources).
+impl Clone for CastDoc {
+    fn clone(&self) -> Self {
+        CastDoc {
+            file: self.file.clone(),
+            dir_version: self.dir_version,
+            cas_id: self.cas_id,
+            key_id: self.key_id,
+            key_sizes: self.key_sizes,
+            keys: self.keys.clone(),
+            slots: self.slots.clone(),
+            dirty_index: self.dirty_index,
+            bitmaps: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
 impl CastDoc {
     pub fn open(data: &[u8]) -> Result<CastDoc, String> {
         let file = ContainerFile::read(data)?;

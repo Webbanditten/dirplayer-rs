@@ -43,6 +43,28 @@ from the asset host at runtime (it sends CORS headers). The hotel's colour varia
   ready to save and edit; "32 px" also converts the small pictures (`s_` members). See below.
 - The room can be drawn on a transparent background (rendered on black and on white, alpha from the difference), and
   **Save picture** downloads it as a PNG.
+- **Undo and redo** (toolbar, Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y) for every change, the 64 and 32 px cast
+  together: before a change the casts it touches are copied in memory (`CastDocument.snapshot()`), undo swaps the copy
+  back in and keeps the current one for redo. A painting session and arrow-key nudges of a registration point are one
+  step each (Paint keeps its own stroke-by-stroke undo while it's open). Undoing back to the saved state marks the cast
+  clean again. At most 80 steps or ~190 MB.
+- **Autosave**: while a cast has unsaved changes, both casts are kept in this browser's IndexedDB (2 s after the last
+  change); after a reload or a crash the start page offers to restore them. Cleared once everything is saved or
+  published. The undo history isn't kept.
+- **Check furni** (toolbar; the badge counts errors, else warnings): Housekeeping's rules (lower-case class, bitmaps,
+  fields and palettes only, no scripts, only the furni's own member names, asset.index's `#id` and classes, alias lines
+  naming only the furni's own members), and what the client would draw differently: aliases to members that aren't
+  there, bitmaps whose palette member isn't a palette, fields that don't read as Lingo, no layer a, odd directions,
+  layers never drawn (the client stops at the first missing letter unless .data lists the layer), a layer missing a
+  direction the others have (the client shows its direction 0 picture), frame gaps, frames .data asks for that aren't
+  there, no icon, no shadow, no 32 px cast, and 32 px pictures missing for large ones. "Show" selects the member (in the
+  other size when needed); some rows can be fixed from the list. Publishing to Housekeeping waits until there are no
+  errors. On 140 hotel furni the drawing checks found nothing but real gaps (the hotel's 32 px chair_norja has no
+  layer b and c for direction 4).
+- **Make icon** (the picture button under the room): `<class>_small`, the picture the hand, trades and the catalogue
+  show, from the preview's direction, state and part colours at 32 px (the 32 px cast's own pictures when it's open,
+  else the large ones halved), cut out on transparency, in both casts. A drawn icon's colour parts (`_small_c`) are
+  removed, since the client would tint them over the new picture.
 
 Transparent pixels are written the way Habbo's white-keyed inks (8, 36, ...) expect: palette index 0 in an 8-bit member,
 white (with alpha 0) in a 32-bit one.

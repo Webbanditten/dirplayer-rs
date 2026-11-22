@@ -198,7 +198,10 @@ export class Furni {
     const best = [...count].sort((a, b) => b[1] - a[1])[0];
     if (best) return best[0];
     const props = this.members.find((m) => m.name.endsWith('.props'));
-    return props ? props.name.slice(0, -6).replace(/^s_/, '') : '';
+    if (props) return props.name.slice(0, -6).replace(/^s_/, '');
+    // Wall items and posters: the picture is <class> itself, the icon <class>_small.
+    const icon = this.members.find((m) => m.type === 'bitmap' && /_small$/i.test(m.name));
+    return icon ? icon.name.slice(0, -6).replace(/^s_/, '') : '';
   }
 
   classes(): string[] {

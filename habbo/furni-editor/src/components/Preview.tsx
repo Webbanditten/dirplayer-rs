@@ -34,6 +34,9 @@ interface Props {
   onPick: (slot: number) => void;
   /** part colour variants from elsewhere (an imported Flash file), used when the hotel has none for the class */
   extraColors?: { label: string; colour: string }[];
+  /** the view (direction, state, colours) as it changes: the icon is made from it */
+  onView?: (view: { direction: number; state: number; colors: string }) => void;
+  onMakeIcon?: (view: { direction: number; state: number; colors: string }) => void;
 }
 
 interface HotelFurni {
@@ -50,7 +53,7 @@ interface Placed {
   animator: Animator;
 }
 
-export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }: Props) {
+export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], onView, onMakeIcon }: Props) {
   const [direction, setDirection] = useState(2);
   const [state, setState] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -104,6 +107,10 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
   const useSmall = smallCast || (small && hasSmall);
   const probe = useMemo(() => floorSetup(furni, { direction, state, colors, shadow, small: useSmall }), [furni, direction, state, colors, shadow, useSmall]);
   const states = probe ? stateNames(probe.data) : ['default'];
+  const shownDirection = probe?.direction ?? direction;
+  useEffect(() => {
+    onView?.({ direction: shownDirection, state, colors });
+  }, [shownDirection, state, colors]);
   const own = useMemo(() => ownDirections(furni, useSmall), [furni, useSmall]);
   // Stay on directions the furni has: 2 when it has it, else its first.
   useEffect(() => {
@@ -270,6 +277,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
           <option value={0}>fit</option>
           {[1, 2, 3, 4].map((z) => <option key={z} value={z}>{z}×</option>)}
         </select>
+        {onMakeIcon && <button className="icon" disabled={!probe} onClick={() => onMakeIcon({ direction: shownDirection, state, colors })} title={`Make the icon (${cls}_small) from this view: the furni in direction ${shownDirection}, this state and these colours, at 32 px`}><Icon name="image" /></button>}
         <button className="icon" disabled={!probe} onClick={savePicture} title="Save picture: the room as drawn now, as a PNG"><Icon name="camera" /></button>
       </div>
     </div>

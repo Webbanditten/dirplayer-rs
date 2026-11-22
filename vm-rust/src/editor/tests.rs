@@ -194,3 +194,18 @@ fn corpus_palettes_and_indices() {
         eprintln!("{}: slot {} clutCastLib {} -> palette {} ok", name, slot, h.clut_cast_lib, pal);
     }
 }
+
+#[test]
+fn snapshots_are_independent() {
+    for path in corpus().into_iter().take(20) {
+        let data = std::fs::read(&path).unwrap();
+        let Ok(mut doc) = CastDoc::open(&data) else { continue };
+        let Some(slot) = (1..=doc.slots.len() as u32).find(|&s| doc.member(s).map(|m| m.kind == TYPE_BITMAP).unwrap_or(false)) else { continue };
+        let before = doc.member(slot).unwrap().name();
+        let copy = doc.clone();
+        doc.set_name(slot, "renamed_for_the_test").unwrap();
+        assert_eq!(copy.member(slot).unwrap().name(), before, "{:?}: the copy changed with the original", path);
+        let (mut a, mut b) = (doc, copy);
+        assert_ne!(a.save(), b.save(), "{:?}", path);
+    }
+}

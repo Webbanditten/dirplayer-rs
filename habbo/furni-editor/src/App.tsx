@@ -1,14 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile, pickFiles } from './wasm';
 import { buildCast, planFlash, splitPlan } from './flash';
 import { largeFileName, makeSmall, smallFileName } from './small';
 import { ALIAS_INDEX, ASSET_INDEX, Furni, parseMemberName } from './furni';
+import { History, type SideKey, type Snap, type Step } from './history';
+import { clearAutosave, loadAutosave, writeAutosave, type Autosave } from './autosave';
+import { checkFurni, type Issue } from './check';
+import { iconMembers, renderIcon, type IconView } from './icon';
 import { FurniGrid, gridModel } from './components/FurniGrid';
 import { Inspector, type ImportMode } from './components/Inspector';
 import { Preview } from './components/Preview';
 import { Paint } from './components/Paint';
 import { LightPanel } from './components/LightPanel';
+import { CheckPanel } from './components/CheckPanel';
 import { Icon, Logo } from './components/Icon';
+
+/** How a change joins the undo history: `group` merges edits in a row (a painting session, arrow-key nudges);
+ *  `both` copies both casts first because the change touches both. */
+export interface EditOptions {
+  group?: string;
+  both?: boolean;
+}
+export type Edit = (what: string, fn: () => void, opts?: EditOptions) => void;
+
+function ago(at: number) {
+  const s = Math.round((Date.now() - at) / 1000);
+  if (s < 90) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} minutes ago`;
+  const h = Math.round(m / 60);
+  return h < 36 ? `${h} hours ago` : new Date(at).toLocaleString();
+}
 
 const DEFAULT_HOST = 'https://images.habbo-danmark.com/hof_furni/';
 const IMAGE_TYPES = 'image/png,image/gif,image/jpeg';
@@ -91,6 +113,19 @@ export function App() {
   }, []);
 
   const furni = useMemo(() => (doc ? new Furni(doc) : null), [doc, rev]);
+  const smallShown = furni?.isSmallCast() ?? false;
+
+  // --- undo, and which content each cast holds ---
+  const history = useRef(new History());
+  const [, setHistRev] = useState(0);
+  /** A content generation per size: a change gives the cast a new one, undo puts the old one back; `saved` is the
+   *  generation last saved or published, so a cast undone back to it is clean again. */
+  const gens = useRef<Record<SideKey, number>>({ large: 0, small: 0 });
+  const saved = useRef<Record<SideKey, number>>({ large: 0, small: 0 });
+  const nextGen = useRef(1);
+  const live = useRef({ doc, other, fileName, dirty, smallShown });
+  live.current = { doc, other, fileName, dirty, smallShown };
+  const keys = (small: boolean): [SideKey, SideKey] => (small ? ['small', 'large'] : ['large', 'small']);
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -101,11 +136,16 @@ export function App() {
   }, [dirty, other]);
   const anyDirty = dirty || !!other?.dirty;
 
-  /** Show a new furni (and its other size, when there is one), dropping the open ones. */
+  /** Show a new furni (and its other size, when there is one), dropping the open ones and their history. */
   const show = useCallback(
     (next: CastDocument, name: string, changed: boolean, pair: Side | null = null) => {
       doc?.free();
       other?.doc.free();
+      history.current.clear();
+      setHistRev((h) => h + 1);
+      const [mine, theirs] = keys(new Furni(next).isSmallCast());
+      gens.current = { large: 0, small: 0 };
+      saved.current = { [mine]: changed ? -1 : 0, [theirs]: pair?.dirty ? -1 : 0 } as Record<SideKey, number>;
       setOther(pair);
       setDoc(next);
       setPainting(null);
@@ -178,17 +218,144 @@ export function App() {
     }
   };
 
-  /** Run a change to the document, then refresh everything that shows it. */
-  const edit = useCallback((what: string, fn: () => void) => {
+  /** Run a change to the document as one undo step (copying the casts it touches first), then refresh everything
+   *  that shows it. */
+  const edit: Edit = useCallback((what: string, fn: () => void, opts: EditOptions = {}) => {
+    const now = live.current;
+    if (!now.doc) return;
+    const [mine, theirs] = keys(now.smallShown);
+    const both = !!(opts.both && now.other);
+    const group = opts.group ? `${mine}:${opts.group}` : undefined;
+    let step: Step | null = null;
+    if (!history.current.joins(group)) {
+      const sides: Step['sides'] = { [mine]: { doc: now.doc.snapshot(), name: now.fileName, gen: gens.current[mine] } };
+      if (both) sides[theirs] = { doc: now.other!.doc.snapshot(), name: now.other!.name, gen: gens.current[theirs] };
+      step = { what, group, at: Date.now(), sides };
+    }
     try {
       fn();
-      setRev((r) => r + 1);
-      setDirty(true);
-      setStatus(what);
     } catch (e) {
+      if (step) for (const s of Object.values(step.sides)) s?.doc.free();
       setStatus(`${what}: ${e}`);
+      return;
     }
+    if (step) history.current.push(step);
+    else history.current.extend(what);
+    gens.current[mine] = nextGen.current++;
+    if (both) {
+      gens.current[theirs] = nextGen.current++;
+      setOther((o) => (o ? { ...o, dirty: true } : o));
+    }
+    setRev((r) => r + 1);
+    setDirty(true);
+    setHistRev((h) => h + 1);
+    setStatus(what);
   }, []);
+
+  /** The casts as they are now, for the step that will bring them back (the documents move, nothing is copied). */
+  const currentSides = (want: SideKey[]): Step['sides'] => {
+    const now = live.current;
+    const [mine] = keys(now.smallShown);
+    const out: Step['sides'] = {};
+    for (const k of want) {
+      if (k === mine && now.doc) out[k] = { doc: now.doc, name: now.fileName, gen: gens.current[k] };
+      else if (k !== mine && now.other) out[k] = { doc: now.other.doc, name: now.other.name, gen: gens.current[k] };
+    }
+    return out;
+  };
+  const applyStep = (step: Step, verb: string) => {
+    const now = live.current;
+    const [mine] = keys(now.smallShown);
+    let nextOther = now.other;
+    for (const [k, snap] of Object.entries(step.sides) as [SideKey, Snap][]) {
+      gens.current[k] = snap.gen;
+      const changed = snap.gen !== saved.current[k];
+      if (k === mine) {
+        setDoc(snap.doc);
+        setFileName(snap.name);
+        setDirty(changed);
+      } else {
+        nextOther = { doc: snap.doc, name: snap.name, dirty: changed };
+      }
+    }
+    setOther(nextOther);
+    setRev((r) => r + 1);
+    setHistRev((h) => h + 1);
+    setStatus(`${verb}: ${step.what}`);
+  };
+  const undo = () => {
+    const step = history.current.undo(currentSides);
+    if (step) applyStep(step, 'Undid');
+  };
+  const redo = () => {
+    const step = history.current.redo(currentSides);
+    if (step) applyStep(step, 'Redid');
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (painting !== null || !(e.metaKey || e.ctrlKey)) return;
+      const t = e.target as HTMLElement;
+      if (t?.tagName === 'TEXTAREA' || (t?.tagName === 'INPUT' && ['text', 'number', 'search'].includes((t as HTMLInputElement).type))) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (key === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  // --- autosave: the open casts in this browser while they have unsaved changes ---
+  const [restore, setRestore] = useState<Autosave | null>(null);
+  useEffect(() => {
+    if (ready) loadAutosave().then((r) => r && setRestore(r));
+  }, [ready]);
+  useEffect(() => {
+    if (!doc) return;
+    const t = setTimeout(() => {
+      const now = live.current;
+      if (!now.doc) return;
+      if (!now.dirty && !now.other?.dirty) {
+        clearAutosave();
+        return;
+      }
+      const [mine, theirs] = keys(now.smallShown);
+      try {
+        const rec: Autosave = { at: Date.now(), shown: mine, colors: flashColors };
+        rec[mine] = { bytes: now.doc.save(), name: now.fileName, dirty: now.dirty };
+        if (now.other) rec[theirs] = { bytes: now.other.doc.save(), name: now.other.name, dirty: now.other.dirty };
+        writeAutosave(rec);
+      } catch (e) {
+        console.error('autosave', e);
+      }
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [doc, rev, dirty, other]);
+  const restoreWork = () => {
+    if (!restore) return;
+    const first = restore[restore.shown] ?? restore.large ?? restore.small;
+    const second = first === restore.large ? restore.small : restore.large;
+    if (!first) return;
+    try {
+      const main = new CastDocument(first.bytes);
+      const pair = second ? { doc: new CastDocument(second.bytes), name: second.name, dirty: second.dirty } : null;
+      show(main, first.name, first.dirty, pair);
+      setFlashColors(restore.colors ?? []);
+      setStatus(`Restored ${[first.name, second?.name].filter(Boolean).join(' and ')} from ${ago(restore.at)}`);
+    } catch (e) {
+      setStatus(`Couldn't restore the unsaved casts: ${e}`);
+    }
+    setRestore(null);
+  };
+  const discardWork = () => {
+    clearAutosave();
+    setRestore(null);
+  };
 
   /** One cast, or two (a furni's large and small cast) picked together. */
   const openFiles = async (files: File[]) => {
@@ -231,13 +398,17 @@ export function App() {
       return `${name} (${bytes.length.toLocaleString()} bytes)`;
     };
     try {
+      const [mine, theirs] = keys(smallShown);
       const done = [saveOne(doc, castName(furni, fileName))];
       setDirty(false);
+      saved.current[mine] = gens.current[mine];
       if (other?.dirty) {
         done.push(saveOne(other.doc, castName(new Furni(other.doc), other.name)));
         setOther({ ...other, dirty: false });
+        saved.current[theirs] = gens.current[theirs];
       }
-      setStatus(`Saved ${done.join(' and ')}`);
+      const n = issues.filter((i) => i.level === 'error').length;
+      setStatus(`Saved ${done.join(' and ')}` + (n ? `. Check furni found ${n} error${n > 1 ? 's' : ''} Housekeeping would refuse` : ''));
     } catch (e) {
       setStatus(`Save failed: ${e}`);
     }
@@ -264,6 +435,7 @@ export function App() {
         if (m.ok) {
           setDirty(false);
           setOther((o) => (o ? { ...o, dirty: false } : o));
+          saved.current = { ...gens.current };
           setHotelFurni({ sprite: String(m.sprite ?? ''), madeHere: true });
         }
       } else if (m.type === 'status') {
@@ -282,6 +454,11 @@ export function App() {
     if (!cls) return setStatus('The cast has no furni class to publish');
     if (hotelFurni && !hotelFurni.madeHere && hotelFurni.sprite.toLowerCase() === cls.toLowerCase())
       return setStatus(`${cls} is the hotel's own furni and is never written over: "New furni from this…" first, then publish the copy`);
+    const errors = issues.filter((i) => i.level === 'error').length;
+    if (errors) {
+      setCheckOpen(true);
+      return setStatus(`Check furni found ${errors} error${errors > 1 ? 's' : ''}: Housekeeping would refuse the cast. Fix ${errors > 1 ? 'them' : 'it'} first`);
+    }
     try {
       const mine = doc.save();
       const theirs = other?.doc.save();
@@ -297,7 +474,6 @@ export function App() {
   };
 
   // --- large and small ---
-  const smallShown = furni?.isSmallCast() ?? false;
   /** The member of the other size that matches `name` (s_ in front for the small one; icons are the same). */
   const counterpart = (f: Furni, name: string, toSmall: boolean) => {
     const target = toSmall ? (/^s_/i.test(name) || /_small(_[a-z])?$/i.test(name) ? name : 's_' + name) : name.replace(/^s_/i, '');
@@ -315,6 +491,8 @@ export function App() {
       if (!confirm(`${cls} has no small (32 px) cast open. Make ${smallFileName(cls)} from the large pictures (halved)?`)) return;
       try {
         target = { doc: makeSmall(doc, cls), name: smallFileName(cls), dirty: true };
+        gens.current.small = nextGen.current++;
+        saved.current.small = -1;
       } catch (e) {
         return setStatus(`Couldn't make the small version: ${e}`);
       }
@@ -510,7 +688,65 @@ export function App() {
         setOther({ ...other, name: castName(new Furni(other.doc), other.name), dirty: true });
       }
       setFileName(castName(new Furni(doc), fileName));
-    });
+    }, { both: true });
+  };
+
+  // --- check furni ---
+  const [checkOpen, setCheckOpen] = useState(false);
+  const otherFurni = useMemo(() => (other ? new Furni(other.doc) : null), [other, rev]);
+  const issues: Issue[] = useMemo(() => {
+    if (!furni) return [];
+    try {
+      return checkFurni(smallShown ? { small: furni, large: otherFurni ?? undefined } : { large: furni, small: otherFurni ?? undefined });
+    } catch (e) {
+      console.error('check', e);
+      return [];
+    }
+  }, [furni, otherFurni, smallShown]);
+  const errorCount = issues.filter((i) => i.level === 'error').length;
+  const warningCount = issues.filter((i) => i.level === 'warning').length;
+
+  // --- the icon (<class>_small), from the preview's view ---
+  const view = useRef<IconView>({ direction: 2, state: 0, colors: '' });
+  const makeIcon = (v: IconView = view.current) => {
+    if (!doc || !furni) return;
+    const cls = furni.className();
+    // Drawn from the 32 px cast's own pictures when it's open, else from the 64 px ones halved.
+    const smallDoc = smallShown ? doc : other?.doc;
+    const src = smallDoc ? { doc: smallDoc, furni: smallShown ? furni : otherFurni! } : { doc, furni };
+    const img = renderIcon(src.doc, src.furni, v, !!smallDoc);
+    if (!img) return setStatus('Nothing to draw: the icon is made from floor furni layers in the preview\'s direction');
+    const targets = [doc, other?.doc].filter((d): d is CastDocument => !!d);
+    const old = iconMembers(furni);
+    if (old.length && !confirm(`Replace ${old.map((o) => o.name).join(' and ')} with the furni as the preview shows it (direction ${img.direction}, ${img.width}×${img.height})?`)) return;
+    edit(`Made the icon ${cls}_small from direction ${img.direction}: ${img.width}×${img.height}${targets.length > 1 ? ', in both casts' : ''}`, () => {
+      for (const d of targets) {
+        const f = new Furni(d);
+        const icons = iconMembers(f);
+        const main = icons.find((i) => i.name.toLowerCase() === `${cls.toLowerCase()}_small`);
+        // Colour parts of a drawn icon (_small_c) would be tinted over the new picture.
+        for (const extra of icons) if (extra !== main) d.delete(extra.slot);
+        const regX = Math.floor(img.width / 2), regY = Math.floor(img.height / 2);
+        if (main) d.setBitmap(main.slot, img.rgba, img.width, img.height, regX, regY, 'auto', 0);
+        else {
+          const template = f.members.find((m) => m.type === 'bitmap')?.slot;
+          if (!template) throw new Error('the cast has no bitmap to base the icon on');
+          d.addBitmap(template, `${cls}_small`, img.rgba, img.width, img.height, regX, regY, 'auto');
+        }
+      }
+    }, { both: true });
+  };
+
+  const pickIssue = (i: Issue) => {
+    const want = i.side === 'small';
+    if (want !== smallShown) switchSize(want);
+    if (i.slot !== undefined) setSelected({ slot: i.slot });
+    setPainting(null);
+  };
+  const fixIssue = (i: Issue) => {
+    if (i.fix === 'icon') makeIcon();
+    else if (i.fix === 'small') switchSize(true);
+    else if (i.fix === 'rename') cloneAs();
   };
 
   const sel = selected && furni?.bySlot.has(selected.slot) ? selected : null;
@@ -610,6 +846,16 @@ export function App() {
         )}
         <span className="spacer" />
         <div className="tb-group">
+          <button className="icon ghost" onClick={undo} disabled={!history.current.canUndo || painting !== null} title={history.current.canUndo ? `Undo: ${history.current.undoLabel} (Ctrl/Cmd+Z)` : 'Nothing to undo'}>
+            <Icon name="undo" />
+          </button>
+          <button className="icon ghost" onClick={redo} disabled={!history.current.canRedo || painting !== null} title={history.current.canRedo ? `Redo: ${history.current.redoLabel} (Ctrl/Cmd+Shift+Z)` : 'Nothing to redo'}>
+            <Icon name="redo" />
+          </button>
+          <button className={`ghost check-btn${checkOpen ? ' on' : ''}`} onClick={() => setCheckOpen(!checkOpen)} disabled={!doc} title="Check furni: what the hotel would refuse or draw differently">
+            <Icon name="check" />Check
+            {doc && (errorCount ? <span className="count error">{errorCount}</span> : warningCount ? <span className="count warning">{warningCount}</span> : <span className="count ok">✓</span>)}
+          </button>
           <button className="ghost" onClick={cloneAs} disabled={!doc} title="Rename every member of the class (both sizes), for a new furni based on this one">
             <Icon name="copy" />New from this…
           </button>
@@ -641,6 +887,7 @@ export function App() {
             </span>
           </div>
         )}
+        {checkOpen && doc && <CheckPanel issues={issues} onPick={pickIssue} onFix={fixIssue} onClose={() => setCheckOpen(false)} />}
       </header>
 
       {!doc || !furni ? (
@@ -650,6 +897,17 @@ export function App() {
             <h1>Furni <em>editor</em></h1>
             <p>Edit Habbo furni casts in the browser: layers, directions and frames, a room to watch them in, pixel painting in the furni's own palettes, lights, and the 64 and 32 px casts side by side.</p>
           </div>
+          {restore && (
+            <div className="restore-card" role="status">
+              <span className="tile-icon"><Icon name="undo" size={20} /></span>
+              <div className="restore-text">
+                <b>Unsaved work from {ago(restore.at)}</b>
+                <span>{[restore.large?.name, restore.small?.name].filter(Boolean).join(' and ')}. Kept in this browser until you save. Changing another cast replaces it.</span>
+              </div>
+              <button className="primary" onClick={restoreWork} disabled={!ready}>Restore</button>
+              <button className="ghost" onClick={discardWork}>Discard</button>
+            </div>
+          )}
           <div className="start-cards">
             <button className="start-card" onClick={openFile} disabled={!ready}>
               <span className="tile-icon"><Icon name="folder" size={20} /></span>
@@ -676,10 +934,10 @@ export function App() {
       ) : painting !== null && furni.bySlot.get(painting)?.bitmap ? (
         <main className="panes painting">
           <section className="pane paint-pane">
-            <Paint key={painting} doc={doc} furni={furni} slot={painting} edit={edit} onClose={() => setPainting(null)} />
+            <Paint key={painting} doc={doc} furni={furni} slot={painting} edit={(what, fn) => edit(what, fn, { group: `paint:${painting}` })} onClose={() => setPainting(null)} />
           </section>
           <section className="pane center">
-            <Preview doc={doc} furni={furni} rev={rev} selected={painting} onPick={(slot) => paint(slot)} extraColors={flashColors} />
+            <Preview doc={doc} furni={furni} rev={rev} selected={painting} onPick={(slot) => paint(slot)} extraColors={flashColors} onView={(v) => { view.current = v; }} onMakeIcon={makeIcon} />
           </section>
         </main>
       ) : (
@@ -727,7 +985,7 @@ export function App() {
             </div>
           </section>
           <section className="pane center">
-            <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} extraColors={flashColors} />
+            <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} extraColors={flashColors} onView={(v) => { view.current = v; }} onMakeIcon={makeIcon} />
           </section>
           <section className="pane right">
             <div className="pane-head">
@@ -755,7 +1013,7 @@ export function App() {
         <div className="hints">
           {doc && <span><kbd>Alt</kbd><kbd>S</kbd> 64 / 32 px</span>}
           {doc && painting === null && <span>double-click: paint</span>}
-          {painting !== null && <span><kbd>Esc</kbd> done · <kbd>⌘Z</kbd> undo</span>}
+          {painting !== null ? <span><kbd>Esc</kbd> done · <kbd>⌘Z</kbd> undo a stroke</span> : doc && <span><kbd>⌘Z</kbd> undo</span>}
         </div>
       </footer>
       {dragging && <div className="drop-overlay">Drop casts, a .swf or an image</div>}
