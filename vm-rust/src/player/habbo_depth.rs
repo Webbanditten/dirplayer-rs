@@ -8,12 +8,13 @@
 //!
 //! This pass re-orders the sprites of the room's furni (`pActiveObjList` of "Room Component Class") and avatars/pets
 //! (`pUserObjList`) when drawing, from the objects' floor footprints:
-//! - sprites of objects on separate tiles at the same height: the object behind (by footprint) first; side by side on
-//!   the same diagonal, the one further right in front;
-//! - sprites of objects that share a tile: as the client ordered them (`locZ`), so sitting and lying stay as they are;
-//!   a furni standing higher on the same tiles (drinks on a table) after the one below it;
-//! - objects on separate tiles at different heights (stacked builds), and light and shadow effects (additive and
-//!   subtractive inks, nearly transparent layers) against other objects, as the client ordered them;
+//! - sprites of objects on separate tiles that both stand on the room floor: the object behind (by footprint) first;
+//!   side by side on the same diagonal, the one further right in front;
+//! - sprites of objects that share a tile: as the client ordered them (`locZ`), so sitting and lying stay as they are,
+//!   and so do stacks (builders hide helper furni inside them);
+//! - stacked furni (not standing on the room floor), objects at different heights, and light and shadow effects
+//!   (additive and subtractive inks, nearly transparent layers) against other objects, as the client ordered them:
+//!   builders tune stacks against the client's order (helper furni hidden inside them);
 //! - an object's own layers keep their order; floor layers (shadows, carpets: far below their object) stay first.
 //! The sorted sprites take the depth values they had, in the new order, so walls, wall items and the interface keep
 //! their places; sprites the client keeps right next to an object's sprite (matte, shadow, sign) follow it.
@@ -64,6 +65,8 @@ pub struct Obj {
     pub y0: i32,
     pub y1: i32,
     pub h: f64,
+    /// Standing on the room's floor (not stacked on other furni): only these are ordered by footprint.
+    pub on_floor: bool,
 }
 
 /// One of an object's sprites.
@@ -157,16 +160,14 @@ pub fn order(objs: &[Obj], sprs: &[Spr]) -> Vec<(usize, i64)> {
             }
             let (oa, ob) = (&objs[a.obj], &objs[b.obj]);
             let ord = if oa.shares_tiles(ob) {
-                if oa.kind == Kind::Furni && ob.kind == Kind::Furni && (oa.h - ob.h).abs() > 0.05 {
-                    oa.h.partial_cmp(&ob.h).unwrap_or(Ordering::Equal)
-                } else {
-                    by_z(i, j)
-                }
-            } else if (oa.h - ob.h).abs() < SAME_LEVEL && !a.effect && !b.effect {
+                // Sharing tiles: as the client ordered them. Sitting depends on it, and so do stacked builds (in
+                // small rooms the client leaves height out, and builders hide helper furni inside their stacks).
+                by_z(i, j)
+            } else if oa.on_floor && ob.on_floor && (oa.h - ob.h).abs() < SAME_LEVEL && !a.effect && !b.effect {
                 footprint_order(oa, ob)
             } else {
-                // At different heights the client's depth (diagonal plus height in big rooms) decides, so stacked
-                // builds look as they were built; light and shadow effects stay where the client put them.
+                // Stacked furni, different heights and light/shadow effects: the client's depth decides, so stacked
+                // builds look as they were built (builders hide helper furni in them against the client's order).
                 by_z(i, j)
             };
             match ord {
@@ -177,30 +178,41 @@ pub fn order(objs: &[Obj], sprs: &[Spr]) -> Vec<(usize, i64)> {
         }
     }
 
-    // Topological order, the client's depth deciding among free sprites; a cycle is broken at its lowest sprite.
-    let mut heap: BinaryHeap<Reverse<(i32, usize, usize)>> = BinaryHeap::new();
+    // Sprites caught in a cycle of constraints (one strongly connected component) keep the client's order among
+    // themselves; every other constraint holds. Components go in topological order, the client's depth deciding
+    // among those that are free.
+    let (comp, ncomp) = strongly_connected(n, &succ, &rest);
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
     for &i in &rest {
-        if indeg[i] == 0 {
-            heap.push(Reverse((sprs[i].z, sprs[i].channel, i)));
-        }
+        members[comp[i]].push(i);
     }
-    let mut done = vec![false; n];
-    let mut sorted: Vec<usize> = Vec::with_capacity(rest.len());
-    while sorted.len() < rest.len() {
-        let next = match heap.pop() {
-            Some(Reverse((_, _, i))) if !done[i] => i,
-            Some(_) => continue,
-            None => *rest.iter().filter(|&&i| !done[i]).min_by(|&&a, &&b| by_z(a, b)).unwrap(),
-        };
-        done[next] = true;
-        sorted.push(next);
-        for &s in &succ[next] {
-            indeg[s] = indeg[s].saturating_sub(1);
-            if indeg[s] == 0 && !done[s] {
-                heap.push(Reverse((sprs[s].z, sprs[s].channel, s)));
+    for m in members.iter_mut() {
+        m.sort_by(|&a, &b| by_z(a, b));
+    }
+    let mut comp_indeg = vec![0usize; ncomp];
+    let mut comp_succ: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
+    for &i in &rest {
+        for &t in &succ[i] {
+            let (a, b) = (comp[i], comp[t]);
+            if a != b {
+                comp_succ[a].push(b);
+                comp_indeg[b] += 1;
             }
         }
     }
+    let first = |c: usize| (sprs[members[c][0]].z, sprs[members[c][0]].channel, c);
+    let mut heap: BinaryHeap<Reverse<(i32, usize, usize)>> = (0..ncomp).filter(|&c| comp_indeg[c] == 0).map(|c| Reverse(first(c))).collect();
+    let mut sorted: Vec<usize> = Vec::with_capacity(rest.len());
+    while let Some(Reverse((_, _, c))) = heap.pop() {
+        sorted.extend_from_slice(&members[c]);
+        for &t in &comp_succ[c] {
+            comp_indeg[t] -= 1;
+            if comp_indeg[t] == 0 {
+                heap.push(Reverse(first(t)));
+            }
+        }
+    }
+    let _ = indeg;
 
     // Their own depth values, ascending, in the new order.
     let mut pool: Vec<i32> = sprs.iter().map(|s| s.z).collect();
@@ -211,6 +223,62 @@ pub fn order(objs: &[Obj], sprs: &[Spr]) -> Vec<(usize, i64)> {
         .enumerate()
         .map(|(rank, &i)| (sprs[i].channel, pool[rank] as i64 * KEY_SCALE + rank as i64 * 32 + ATTACH_SLOT))
         .collect()
+}
+
+/// Strongly connected components of the constraint graph (Tarjan, without recursion): the component of each node
+/// in `nodes`, and how many there are.
+fn strongly_connected(n: usize, succ: &[Vec<usize>], nodes: &[usize]) -> (Vec<usize>, usize) {
+    const NONE: usize = usize::MAX;
+    let mut index = vec![NONE; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut comp = vec![NONE; n];
+    let (mut next, mut count) = (0usize, 0usize);
+    for &start in nodes {
+        if index[start] != NONE {
+            continue;
+        }
+        index[start] = next;
+        low[start] = next;
+        next += 1;
+        stack.push(start);
+        on_stack[start] = true;
+        let mut work: Vec<(usize, usize)> = vec![(start, 0)];
+        while let Some(top) = work.len().checked_sub(1) {
+            let (v, pos) = work[top];
+            if pos < succ[v].len() {
+                work[top].1 += 1;
+                let w = succ[v][pos];
+                if index[w] == NONE {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    work.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+            } else {
+                work.pop();
+                if let Some(&(u, _)) = work.last() {
+                    low[u] = low[u].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    while let Some(w) = stack.pop() {
+                        on_stack[w] = false;
+                        comp[w] = count;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    count += 1;
+                }
+            }
+        }
+    }
+    (comp, count)
 }
 
 // --- reading the room from the client ------------------------------------------------------------------------------
@@ -331,6 +399,13 @@ fn collect(player: &DirPlayer) -> Option<(Vec<Obj>, Vec<Spr>)> {
         _ => return None,
     }
     let z_offset = num(prop(player, geometry, "pZOffset")).unwrap_or(0.0);
+    let heights: Vec<Vec<f64>> = list(player, prop(player, geometry, "pHeightMap"))
+        .into_iter()
+        .map(|row| list(player, Some(row)).into_iter().map(|h| num(Some(h)).unwrap_or(0.0)).collect())
+        .collect();
+    let floor_at = |x: i32, y: i32| -> f64 {
+        heights.get(y.max(0) as usize).and_then(|row| row.get(x.max(0) as usize)).copied().filter(|h| *h < 1000.0).unwrap_or(0.0)
+    };
 
     let mut objs = Vec::new();
     let mut sprs = Vec::new();
@@ -359,7 +434,8 @@ fn collect(player: &DirPlayer) -> Option<(Vec<Obj>, Vec<Spr>)> {
         let corrected = matches!(prop(player, furni, "pCorrectLocZ"), Some(Datum::Int(1)));
         let base = 1000.0 * (x + y + 1) as f64 + z_offset + if corrected { h * 1000.0 } else { 0.0 };
         let index = objs.len();
-        objs.push(Obj { kind: Kind::Furni, x0: x, x1: x + w - 1, y0: y, y1: y + l - 1, h });
+        let on_floor = (h - floor_at(x, y)).abs() < SAME_LEVEL;
+        objs.push(Obj { kind: Kind::Furni, x0: x, x1: x + w - 1, y0: y, y1: y + l - 1, h, on_floor });
         for d in list(player, prop(player, furni, "pSprList")) {
             if let Some(ch) = sprite_ref(Some(d)) {
                 push_sprite(player, ch, index, Some(base), &mut sprs);
@@ -375,7 +451,8 @@ fn collect(player: &DirPlayer) -> Option<(Vec<Obj>, Vec<Spr>)> {
         let h = num(prop(player, user, "pLocH")).unwrap_or(0.0);
         let (x, y) = (x.round() as i32, y.round() as i32);
         let index = objs.len();
-        objs.push(Obj { kind: Kind::User, x0: x, x1: x, y0: y, y1: y, h });
+        let on_floor = (h - floor_at(x, y)).abs() < SAME_LEVEL;
+        objs.push(Obj { kind: Kind::User, x0: x, x1: x, y0: y, y1: y, h, on_floor });
         for name in ["pSprite", "pMatteSpr", "pShadowSpr"] {
             if let Some(ch) = sprite_ref(prop(player, user, name)) {
                 push_sprite(player, ch, index, None, &mut sprs);
@@ -442,10 +519,10 @@ mod tests {
     use super::*;
 
     fn furni(x: i32, y: i32, w: i32, l: i32) -> Obj {
-        Obj { kind: Kind::Furni, x0: x, x1: x + w - 1, y0: y, y1: y + l - 1, h: 0.0 }
+        Obj { kind: Kind::Furni, x0: x, x1: x + w - 1, y0: y, y1: y + l - 1, h: 0.0, on_floor: true }
     }
     fn user(x: i32, y: i32) -> Obj {
-        Obj { kind: Kind::User, x0: x, x1: x, y0: y, y1: y, h: 0.0 }
+        Obj { kind: Kind::User, x0: x, x1: x, y0: y, y1: y, h: 0.0, on_floor: true }
     }
     fn spr(channel: usize, obj: usize, z: i32) -> Spr {
         Spr { channel, obj, z, rect: IntRect { left: 0, top: 0, right: 100, bottom: 100 }, floor: false, effect: false }
@@ -516,14 +593,17 @@ mod tests {
     }
 
     #[test]
-    fn stacked_furni_over_the_one_below() {
-        // Small rooms give stacked furni no height in their depth: drinks (h 1) on a table whose layers are +1000.
-        let mut drinks = furni(10, 19, 1, 1);
-        drinks.h = 1.0;
-        let objs = [furni(10, 19, 2, 2), drinks];
-        let sprs = [spr(1, 0, z(10, 19, 999)), spr(2, 0, z(10, 19, 1000)), spr(3, 1, z(10, 19, -6))];
+    fn stacks_on_shared_tiles_keep_the_clients_order() {
+        // Ss'S Gold Lounge (small room, no height in the depth): a money bag at 3.2 hidden in a column of gold bars on
+        // the same tile, same depth; the bar's later channel draws over it, and so it stays.
+        let mut bag = furni(11, 6, 1, 1);
+        bag.h = 3.2;
+        let mut bar = furni(11, 6, 1, 1);
+        bar.h = 2.8;
+        let objs = [bag, bar];
+        let sprs = [spr(140, 0, z(11, 6, -6)), spr(845, 1, z(11, 6, -6))];
         let o = drawn(&objs, &sprs);
-        assert!(before(&o, 1, 3) && before(&o, 2, 3), "{o:?}");
+        assert!(before(&o, 140, 845), "{o:?}");
     }
 
     #[test]
@@ -542,8 +622,10 @@ mod tests {
         // adds 1000 per height unit, so the bag (behind but higher) is drawn over the rainbow; that stays.
         let mut bag = furni(9, 1, 1, 1);
         bag.h = 2.6;
+        bag.on_floor = false;
         let mut rainbow = furni(9, 2, 1, 1);
         rainbow.h = 1.5;
+        rainbow.on_floor = false;
         let objs = [bag, rainbow];
         let sprs = [spr(1, 0, z(9, 1, 2600 - 6)), spr(2, 1, z(9, 2, 1500 - 4)), spr(3, 1, z(9, 2, 1500 - 6))];
         let o = drawn(&objs, &sprs);
@@ -560,6 +642,42 @@ mod tests {
         let sprs = [halo, spr(2, 0, z(9, 13, -6)), spr(3, 1, z(8, 15, -6))];
         let o = drawn(&objs, &sprs);
         assert!(before(&o, 3, 1) && before(&o, 2, 3), "{o:?}");
+    }
+
+    #[test]
+    fn stacked_helpers_stay_hidden() {
+        // Casino Tripple 6ix Dices: a plant at height 3 hidden behind gold bars at height 3 on the next tile. Both are
+        // stacked, so the client's order (bars over the plant) stays even though the plant is in front by footprint.
+        let mut plant = furni(9, 5, 1, 1);
+        plant.h = 3.0;
+        plant.on_floor = false;
+        let mut bars = furni(9, 4, 1, 1);
+        bars.h = 3.0;
+        bars.on_floor = false;
+        let objs = [plant, bars];
+        let sprs = [spr(1, 0, z(9, 5, -1100)), spr(2, 1, z(9, 4, -6))];
+        let o = drawn(&objs, &sprs);
+        assert!(before(&o, 1, 2), "{o:?}");
+    }
+
+    #[test]
+    fn a_cycle_does_not_move_others() {
+        // Three objects whose constraints go round (A behind B by footprint, B and C by height, C and A by height),
+        // plus a stack the dragon lamp sits on: the lamp stays after its stand.
+        let mut a = furni(1, 1, 1, 1);
+        a.h = 1.0;
+        let mut b = furni(2, 1, 1, 1);
+        b.h = 1.0;
+        let c = furni(1, 2, 1, 1);
+        let mut stand = furni(9, 5, 1, 1);
+        stand.h = 3.4;
+        let mut lamp = furni(9, 5, 1, 1);
+        lamp.h = 4.0;
+        let objs = [a, b, c, stand, lamp];
+        let sprs = [spr(1, 0, z(1, 1, 900)), spr(2, 1, z(2, 1, -900)), spr(3, 2, z(1, 2, 0)), spr(4, 3, z(9, 5, -606)), spr(5, 4, z(9, 5, -5))];
+        let o = drawn(&objs, &sprs);
+        assert!(before(&o, 4, 5), "{o:?}");
+        assert_eq!(o.len(), 5);
     }
 
     #[test]
@@ -593,7 +711,7 @@ mod bench {
             let (x, y) = (rnd(28), rnd(28));
             let user = i >= 170;
             let (w, l) = if user { (1, 1) } else { (1 + rnd(2), 1 + rnd(2)) };
-            objs.push(Obj { kind: if user { Kind::User } else { Kind::Furni }, x0: x, x1: x + w - 1, y0: y, y1: y + l - 1, h: 0.0 });
+            objs.push(Obj { kind: if user { Kind::User } else { Kind::Furni }, x0: x, x1: x + w - 1, y0: y, y1: y + l - 1, h: 0.0, on_floor: true });
             let (sx, sy) = ((x - y) * 16 + 400, (x + y) * 8 + 40);
             for k in 0..if user { 3 } else { 4 } {
                 let z = 1000 * (x + y + 1) + rnd(80) - 40 + k;
