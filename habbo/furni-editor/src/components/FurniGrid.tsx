@@ -80,25 +80,26 @@ interface Props {
   small: boolean;
   selected: number | null;
   onSelect: (slot: number, alias?: string) => void;
+  onPaint?: (slot: number) => void;
   onAddFrame: (letter: string, direction: number, frame: number, file?: File) => void;
   onAddLayer: (letter: string) => void;
   onMirror: () => void;
 }
 
-function CellView({ doc, furni, cell, rev, selected, onSelect }: { doc: CastDocument; furni: Furni; cell: Cell; rev: number; selected: boolean; onSelect: () => void }) {
+function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc: CastDocument; furni: Furni; cell: Cell; rev: number; selected: boolean; onSelect: () => void; onPaint?: (slot: number) => void }) {
   const m = furni.bySlot.get(cell.slot);
   if (!m?.bitmap) return null;
   const title = cell.aliasOf ? `${cell.name}\n= ${cell.aliasOf}${cell.flip ? ' (mirrored)' : ''}` : cell.name;
   const placeholder = m.bitmap.width <= 1 && m.bitmap.height <= 1;
   return (
-    <button className={`cell${selected ? ' selected' : ''}${cell.aliasOf ? ' alias' : ''}`} title={title} onClick={onSelect}>
+    <button className={`cell${selected ? ' selected' : ''}${cell.aliasOf ? ' alias' : ''}`} title={title + '\n(double-click to paint)'} onClick={onSelect} onDoubleClick={() => onPaint?.(cell.slot)}>
       {placeholder ? <span className="empty-frame">empty</span> : <Thumb doc={doc} slot={cell.slot} header={m.bitmap} flip={cell.flip} rev={rev} />}
       {cell.aliasOf && <span className="badge">{cell.flip ? '⇋' : '='}</span>}
     </button>
   );
 }
 
-export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onAddFrame, onAddLayer, onMirror }: Props) {
+export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror }: Props) {
   const g = gridModel(furni, small);
   const dirsUsed = [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
   const nextLetter = String.fromCharCode(97 + g.rows.length);
@@ -125,7 +126,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onAddFra
                   <div className="frames">
                     {list.map(([f, cell]) => (
                       <div key={f} className="frame">
-                        <CellView doc={doc} furni={furni} cell={cell} rev={rev} selected={selected === cell.slot && !cell.aliasOf} onSelect={() => onSelect(cell.slot, cell.aliasOf ? cell.name : undefined)} />
+                        <CellView onPaint={onPaint} doc={doc} furni={furni} cell={cell} rev={rev} selected={selected === cell.slot && !cell.aliasOf} onSelect={() => onSelect(cell.slot, cell.aliasOf ? cell.name : undefined)} />
                         <div className="frame-no">{f}</div>
                       </div>
                     ))}
@@ -163,7 +164,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onAddFra
           <div className="frames">
             {g.shadows.map((c) => (
               <div key={c.name} className="frame">
-                <CellView doc={doc} furni={furni} cell={c} rev={rev} selected={selected === c.slot && !c.aliasOf} onSelect={() => onSelect(c.slot, c.aliasOf ? c.name : undefined)} />
+                <CellView onPaint={onPaint} doc={doc} furni={furni} cell={c} rev={rev} selected={selected === c.slot && !c.aliasOf} onSelect={() => onSelect(c.slot, c.aliasOf ? c.name : undefined)} />
                 <div className="frame-no">{c.name.replace(/^.*_sd_?/, '') || '–'}</div>
               </div>
             ))}
@@ -176,7 +177,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onAddFra
           <div className="frames">
             {g.icons.map((c) => (
               <div key={c.name} className="frame">
-                <CellView doc={doc} furni={furni} cell={c} rev={rev} selected={selected === c.slot} onSelect={() => onSelect(c.slot)} />
+                <CellView onPaint={onPaint} doc={doc} furni={furni} cell={c} rev={rev} selected={selected === c.slot} onSelect={() => onSelect(c.slot)} />
                 <div className="frame-no">{c.name.replace(/^.*_small_?/, '') || 'main'}</div>
               </div>
             ))}
@@ -189,7 +190,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onAddFra
           <div className="frames">
             {g.small.map((m) => (
               <div key={m.slot} className="frame">
-                <CellView doc={doc} furni={furni} cell={{ name: m.name, slot: m.slot, flip: false }} rev={rev} selected={selected === m.slot} onSelect={() => onSelect(m.slot)} />
+                <CellView onPaint={onPaint} doc={doc} furni={furni} cell={{ name: m.name, slot: m.slot, flip: false }} rev={rev} selected={selected === m.slot} onSelect={() => onSelect(m.slot)} />
                 <div className="frame-no" title={m.name}>{m.name.replace(/^s_.*?_([a-z])_0_\d+_\d+_(\d+)_(\d+)$/i, '$1 d$2 f$3')}</div>
               </div>
             ))}
@@ -202,7 +203,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onAddFra
           <div className="frames">
             {g.other.map((m) => (
               <div key={m.slot} className="frame">
-                <CellView doc={doc} furni={furni} cell={{ name: m.name, slot: m.slot, flip: false }} rev={rev} selected={selected === m.slot} onSelect={() => onSelect(m.slot)} />
+                <CellView onPaint={onPaint} doc={doc} furni={furni} cell={{ name: m.name, slot: m.slot, flip: false }} rev={rev} selected={selected === m.slot} onSelect={() => onSelect(m.slot)} />
                 <div className="frame-no" title={m.name}>{m.name}</div>
               </div>
             ))}

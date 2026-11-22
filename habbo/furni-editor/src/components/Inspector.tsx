@@ -20,6 +20,7 @@ interface Props {
   onExport: (slot: number) => void;
   onDuplicate: (slot: number) => void;
   onDelete: (slot: number) => void;
+  onPaint: (slot: number) => void;
 }
 
 const LINGO_FIELDS = /\.(props|data)$|^asset\.index$/i;
@@ -155,7 +156,8 @@ export function Inspector(props: Props) {
         <>
           <BitmapEditor doc={doc} member={member} rev={rev} edit={edit} />
           <div className="row">
-            <button className="primary" onClick={() => props.onImport(slot)}>Replace with image…</button>
+            <button className="primary" onClick={() => props.onPaint(slot)} title="Draw on the pixels, in the member's own palette (also: double-click it in the grid)">Paint…</button>
+            <button onClick={() => props.onImport(slot)}>Replace with image…</button>
             <select value={props.importMode} onChange={(e) => props.setImportMode(e.target.value as ImportMode)} title="How imported pixels are stored">
               <option value="auto">auto (8-bit if every colour is in the palette)</option>
               <option value="indexed">8-bit, nearest palette colours</option>

@@ -47,6 +47,36 @@ from the asset host at runtime (it sends CORS headers). The hotel's colour varia
 Transparent pixels are written the way Habbo's white-keyed inks (8, 36, ...) expect: palette index 0 in an 8-bit member,
 white (with alpha 0) in a 32-bit one.
 
+## Paint and palettes
+
+**How Shockwave stores colours.** An 8-bit bitmap member stores one palette *index* per pixel; the colours come from a
+palette: a built-in one (System Mac, System Win, Grayscale, ...) or a palette member of the cast (a `CLUT` of 256
+colours; the bitmap's header points at it by member number, `clutCastLib` -1 = the same cast, as in every Habbo cast).
+Several bitmaps can share a palette member, so changing one of its colours changes all of them. Index 0 is white in
+Director's palettes and is the background the white-keyed inks drop (8 matte: where it touches the edge, 36 everywhere).
+Habbo's tinted layers (ink 41: the client swaps white for the part colour, black stays) are grey, often on the built-in
+Grayscale palette, as chair_norja's seat. A 32-bit member has no palette: colours and alpha per pixel.
+
+**Paint** (Paint… in the inspector, or double-click a member in the grid or list) draws on the member's own pixels:
+indices for an 8-bit member, colours with alpha for a 32-bit one. The room preview stays beside it and follows every
+stroke.
+
+- Tools like Windows XP Paint: pencil, brush, eraser (index 0 / transparent), fill, colour picker, magnifier, airbrush,
+  line (Shift: 45°), rectangle and ellipse (outline, outline + fill, fill; Shift: square/circle), and a registration
+  point tool. Left button = primary colour, right button = secondary. Letters pick tools (P, B, E, F, K, Z, A, L, R, O,
+  G), Ctrl/Cmd+Z / Y undo and redo, Esc closes.
+- Colour box: the member's palette (256 swatches; double-click one to change that palette colour; a built-in palette has
+  to be copied first) or, for 32-bit, XP's colours, transparent and a custom colour.
+- Palette: switch the member to another palette (with "remap colours" each index goes to the nearest colour, so the
+  picture looks the same; without it the indices stay and the colours change), **New palette…** (a copy, one from the
+  picture's colours (median cut, white at 0 and black at 255), or a grey ramp for tinted layers), **Make 32-bit** /
+  **Make 8-bit on…** (a palette of the cast, a built-in one, or a new one from the picture).
+- Image: flip (the registration point flips with it), canvas size with an anchor (bottom keeps the furni on its tile).
+
+A new palette member is written the way Director writes them (a named `CASt` of type 4 without specific data, and a
+256-entry `CLUT`). Checked in the web client: chair_norja's seat moved onto a new palette with a changed entry draws the
+same as in the preview.
+
 ## Flash furni
 
 `src/flash.ts` (rules) on top of the Rust `SwfDocument` (`vm-rust/src/editor/swf.rs`: binary data, symbol names,

@@ -5,6 +5,7 @@ import { ALIAS_INDEX, ASSET_INDEX, Furni, parseMemberName } from './furni';
 import { FurniGrid, gridModel } from './components/FurniGrid';
 import { Inspector, type ImportMode } from './components/Inspector';
 import { Preview } from './components/Preview';
+import { Paint } from './components/Paint';
 
 const DEFAULT_HOST = 'https://images.habbo-danmark.com/hof_furni/';
 const IMAGE_TYPES = 'image/png,image/gif,image/jpeg';
@@ -33,6 +34,7 @@ export function App() {
   const [selected, setSelected] = useState<{ slot: number; alias?: string } | null>(null);
   const [status, setStatus] = useState('');
   const [tab, setTab] = useState<'furni' | 'members'>('furni');
+  const [painting, setPainting] = useState<number | null>(null);
   const [importMode, setImportMode] = useState<ImportMode>('auto');
   const [host, setHost] = useState(() => stored('furniEditor.host', DEFAULT_HOST));
   const [className, setClassName] = useState(() => stored('furniEditor.class', 'chair_norja'));
@@ -58,6 +60,7 @@ export function App() {
     (next: CastDocument, name: string, changed: boolean) => {
       doc?.free();
       setDoc(next);
+      setPainting(null);
       setFileName(name);
       setDirty(changed);
       setSelected(null);
@@ -303,6 +306,12 @@ export function App() {
   };
 
   const sel = selected && furni?.bySlot.has(selected.slot) ? selected : null;
+  const paint = (slot: number) => {
+    if (furni?.bySlot.get(slot)?.bitmap) {
+      setSelected({ slot });
+      setPainting(slot);
+    }
+  };
 
   // Drop a .cct/.cst anywhere to open it; an image onto the window replaces the selected bitmap (the grid's + cells
   // take images for new frames themselves).
@@ -345,6 +354,15 @@ export function App() {
           <p>Open a <code>hh_furni_xx_&lt;class&gt;.cct</code> from disk or load one from the hotel's asset host, or import a Flash furni (<code>.swf</code>) to make a new cast from it. Change layers, directions, frames, registration points and the <code>.props</code>/<code>.data</code> texts, watch it in the room, then save the cast.</p>
           {!ready && <p className="muted">Loading DirPlayer…</p>}
         </main>
+      ) : painting !== null && furni.bySlot.get(painting)?.bitmap ? (
+        <main className="panes painting">
+          <section className="pane paint-pane">
+            <Paint key={painting} doc={doc} furni={furni} slot={painting} edit={edit} onClose={() => setPainting(null)} />
+          </section>
+          <section className="pane center">
+            <Preview doc={doc} furni={furni} rev={rev} selected={painting} onPick={(slot) => paint(slot)} extraColors={flashColors} />
+          </section>
+        </main>
       ) : (
         <main className="panes">
           <section className="pane left">
@@ -353,14 +371,14 @@ export function App() {
               <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')}>All members ({furni.members.length})</button>
             </div>
             {tab === 'furni' ? (
-              <FurniGrid doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
+              <FurniGrid doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
             ) : (
               <table className="members">
                 <tbody>
                   {furni.members.map((m) => {
                     const p = parseMemberName(m.name);
                     return (
-                      <tr key={m.slot} className={sel?.slot === m.slot ? 'selected' : ''} onClick={() => setSelected({ slot: m.slot })}>
+                      <tr key={m.slot} className={sel?.slot === m.slot ? 'selected' : ''} onClick={() => setSelected({ slot: m.slot })} onDoubleClick={() => paint(m.slot)}>
                         <td className="muted">{m.slot}</td>
                         <td>{m.type}</td>
                         <td>{m.name}</td>
@@ -387,7 +405,7 @@ export function App() {
           </section>
           <section className="pane right">
             {sel ? (
-              <Inspector key={sel.slot} doc={doc} furni={furni} rev={rev} slot={sel.slot} alias={sel.alias} importMode={importMode} setImportMode={setImportMode} edit={edit} onImport={importInto} onExport={exportMember} onDuplicate={duplicate} onDelete={remove} />
+              <Inspector key={sel.slot} doc={doc} furni={furni} rev={rev} slot={sel.slot} alias={sel.alias} importMode={importMode} setImportMode={setImportMode} edit={edit} onImport={importInto} onExport={exportMember} onDuplicate={duplicate} onDelete={remove} onPaint={paint} />
             ) : (
               <div className="inspector muted">Pick a member in the grid, the list or the room.</div>
             )}
