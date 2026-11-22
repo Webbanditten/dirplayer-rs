@@ -1,4 +1,4 @@
-import init, { CastDocument } from '../../../vm-rust/pkg/vm_rust.js';
+import init, { CastDocument, SwfDocument } from '../../../vm-rust/pkg/vm_rust.js';
 
 let ready: Promise<unknown> | null = null;
 
@@ -9,7 +9,7 @@ export function loadWasm() {
   return (ready ??= init());
 }
 
-export { CastDocument };
+export { CastDocument, SwfDocument };
 
 export function decodeImage(bytes: Uint8Array): { width: number; height: number; rgba: Uint8Array } {
   const out = CastDocument.decodeImage(bytes);

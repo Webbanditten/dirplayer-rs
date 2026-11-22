@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CastDocument, decodeImage, download, encodePng, loadWasm, pickFile } from './wasm';
+import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile } from './wasm';
+import { buildCast, planFlash } from './flash';
 import { ALIAS_INDEX, ASSET_INDEX, Furni, parseMemberName } from './furni';
 import { FurniGrid, gridModel } from './components/FurniGrid';
 import { Inspector, type ImportMode } from './components/Inspector';
@@ -35,6 +36,9 @@ export function App() {
   const [importMode, setImportMode] = useState<ImportMode>('auto');
   const [host, setHost] = useState(() => stored('furniEditor.host', DEFAULT_HOST));
   const [className, setClassName] = useState(() => stored('furniEditor.class', 'chair_norja'));
+  const [templateClass] = useState(() => stored('furniEditor.template', 'chair_norja'));
+  const [flashSmall, setFlashSmall] = useState(() => stored('furniEditor.flashSmall', '0') === '1');
+  const [flashColors, setFlashColors] = useState<{ label: string; colour: string }[]>([]);
 
   useEffect(() => {
     loadWasm().then(() => setReady(true), (e) => setStatus(`Couldn't load DirPlayer: ${e}`));
@@ -50,25 +54,62 @@ export function App() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
+  const show = useCallback(
+    (next: CastDocument, name: string, changed: boolean) => {
+      doc?.free();
+      setDoc(next);
+      setFileName(name);
+      setDirty(changed);
+      setSelected(null);
+      setRev((r) => r + 1);
+    },
+    [doc],
+  );
+
   const open = useCallback(
     (bytes: Uint8Array, name: string) => {
       if (dirty && !confirm('Discard the changes to the open cast?')) return;
       try {
         const next = new CastDocument(bytes);
-        doc?.free();
-        setDoc(next);
-        setFileName(name);
-        setDirty(false);
-        setSelected(null);
-        setRev((r) => r + 1);
+        show(next, name, false);
+        setFlashColors([]);
         const f = new Furni(next);
         setStatus(`Opened ${name}: ${f.members.length} members, class ${f.className() || '?'}`);
       } catch (e) {
         setStatus(`Couldn't open ${name}: ${e}`);
       }
     },
-    [doc, dirty],
+    [dirty, show],
   );
+
+  /** A Flash furni (.swf) converted into a new cast, built on a template cast from the hotel (for its Director-written
+   *  container) whose members are replaced. */
+  const importFlash = async (file: File) => {
+    if (dirty && !confirm('Discard the changes to the open cast?')) return;
+    setStatus(`Converting ${file.name}…`);
+    let swf: SwfDocument | null = null;
+    try {
+      swf = new SwfDocument(new Uint8Array(await file.arrayBuffer()));
+      const plan = planFlash(swf, file.name, { small: flashSmall });
+      const template = `hh_furni_xx_${templateClass.trim() || 'chair_norja'}.cct`;
+      const res = await fetch(host.replace(/\/?$/, '/') + template);
+      if (!res.ok) throw new Error(`couldn't load the template cast ${template} (HTTP ${res.status})`);
+      const next = new CastDocument(new Uint8Array(await res.arrayBuffer()));
+      buildCast(next, swf, plan);
+      show(next, `hh_furni_xx_${plan.sprite}.cct`, true);
+      setFlashColors(plan.colors.map((c) => ({ label: `flash colour ${c.id}: ${c.colour}`, colour: c.colour })));
+      const aliases = plan.fields.find((f) => f.name === ALIAS_INDEX)?.text.split('\n').length ?? 0;
+      setStatus(
+        `Converted ${file.name}: ${plan.sprite}, ${plan.dims[0]}×${plan.dims[1]}, ${plan.bitmaps.length} pictures, ${aliases} aliases, ` +
+          `${plan.fields.map((f) => f.name).join(', ')}` + (plan.colors.length ? `; ${plan.colors.length} colour variants` : '') +
+          (plan.warnings.length ? `. Warnings: ${plan.warnings.slice(0, 4).join('; ')}${plan.warnings.length > 4 ? ` (+${plan.warnings.length - 4})` : ''}` : ''),
+      );
+    } catch (e) {
+      setStatus(`Couldn't convert ${file.name}: ${e}`);
+    } finally {
+      swf?.free();
+    }
+  };
 
   /** Run a change to the document, then refresh everything that shows it. */
   const edit = useCallback((what: string, fn: () => void) => {
@@ -270,6 +311,7 @@ export function App() {
     if (!file) return;
     e.preventDefault();
     if (/\.(cct|cst)$/i.test(file.name)) open(new Uint8Array(await file.arrayBuffer()), file.name);
+    else if (/\.swf$/i.test(file.name)) importFlash(file);
     else if (/^image\//.test(file.type) || /\.(png|gif|jpe?g)$/i.test(file.name)) {
       const m = sel && furni?.bySlot.get(sel.slot);
       if (m?.type === 'bitmap') importInto(m.slot, file);
@@ -287,6 +329,11 @@ export function App() {
         <input className="cls" value={className} onChange={(e) => setClassName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && openFromHotel()} placeholder="class, e.g. chair_norja" />
         <button onClick={openFromHotel} disabled={!ready}>Load from hotel</button>
         <span className="sep" />
+        <button onClick={async () => { const f = await pickFile('.swf'); if (f) importFlash(f); }} disabled={!ready} title="Convert a Flash furni (.swf) into a Shockwave cast; you can also drop the .swf on the window">
+          Import Flash furni…
+        </button>
+        <label title="Also convert the 32 px pictures (s_ members)"><input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} /> 32 px</label>
+        <span className="sep" />
         <button className="primary" onClick={save} disabled={!doc}>Save .cct</button>
         <button onClick={cloneAs} disabled={!doc} title="Rename every member of the class, for a new furni based on this one">New furni from this…</button>
         <span className="spacer" />
@@ -295,7 +342,7 @@ export function App() {
       {!doc || !furni ? (
         <main className="welcome">
           <h2>Edit Habbo furni casts</h2>
-          <p>Open a <code>hh_furni_xx_&lt;class&gt;.cct</code> from disk or load one from the hotel's asset host. Change layers, directions, frames, registration points and the <code>.props</code>/<code>.data</code> texts, watch it in the room, then save the cast.</p>
+          <p>Open a <code>hh_furni_xx_&lt;class&gt;.cct</code> from disk or load one from the hotel's asset host, or import a Flash furni (<code>.swf</code>) to make a new cast from it. Change layers, directions, frames, registration points and the <code>.props</code>/<code>.data</code> texts, watch it in the room, then save the cast.</p>
           {!ready && <p className="muted">Loading DirPlayer…</p>}
         </main>
       ) : (
@@ -336,7 +383,7 @@ export function App() {
             </div>
           </section>
           <section className="pane center">
-            <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} />
+            <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} extraColors={flashColors} />
           </section>
           <section className="pane right">
             {sel ? (

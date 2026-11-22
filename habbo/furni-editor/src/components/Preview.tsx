@@ -4,6 +4,22 @@ import { Animator, FPS } from '../animation';
 import { floorSetup, ownDirections, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
 import { composite, drawFloor, fitRoom, footprint, roomLayout, tileLoc, type Placement, type RoomLayout } from '../room';
 import { spriteRect } from '../furni';
+import { download, encodePng } from '../wasm';
+
+function stored(key: string, fallback: string) {
+  try {
+    return localStorage.getItem('furniEditor.' + key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function store(key: string, value: string) {
+  try {
+    localStorage.setItem('furniEditor.' + key, value);
+  } catch {
+    /* private mode */
+  }
+}
 
 interface Props {
   doc: CastDocument;
@@ -11,6 +27,8 @@ interface Props {
   rev: number;
   selected: number | null;
   onPick: (slot: number) => void;
+  /** part colour variants from elsewhere (an imported Flash file), used when the hotel has none for the class */
+  extraColors?: { label: string; colour: string }[];
 }
 
 interface HotelFurni {
@@ -27,7 +45,7 @@ interface Placed {
   animator: Animator;
 }
 
-export function Preview({ doc, furni, rev, selected, onPick }: Props) {
+export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }: Props) {
   const [direction, setDirection] = useState(2);
   const [state, setState] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -37,8 +55,12 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
   const [zoom, setZoom] = useState(0);
   const [stageWidth, setStageWidth] = useState(600);
   const stage = useRef<HTMLDivElement>(null);
-  const [floor, setFloor] = useState('#989865');
-  const [background, setBackground] = useState('#000000');
+  const [floor, setFloorState] = useState(() => stored('floor', '#989865'));
+  const [background, setBackgroundState] = useState(() => stored('background', '#2e3a40'));
+  const [transparent, setTransparentState] = useState(() => stored('transparent', '1') === '1');
+  const setFloor = (v: string) => (store('floor', v), setFloorState(v));
+  const setBackground = (v: string) => (store('background', v), setBackgroundState(v));
+  const setTransparent = (v: boolean) => (store('transparent', v ? '1' : '0'), setTransparentState(v));
   const [grid, setGrid] = useState(true);
   const [showFootprint, setShowFootprint] = useState(false);
   const [small, setSmall] = useState(false);
@@ -50,6 +72,7 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
   useEffect(() => {
     let live = true;
     setHotel([]);
+    setColors(extraColors[0]?.colour ?? '');
     if (!cls) return;
     fetch(`/hotel-api/furni/search?query=${encodeURIComponent(cls)}`)
       .then((r) => (r.ok ? r.json() : []))
@@ -59,12 +82,14 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
         mine.sort((a, b) => (a.sprite.includes('*') ? 1 : 0) - (b.sprite.includes('*') ? 1 : 0) || a.sprite.localeCompare(b.sprite, undefined, { numeric: true }));
         setHotel(mine);
         if (mine[0]?.colour) setColors(mine[0].colour);
+        else if (extraColors[0]) setColors(extraColors[0].colour);
       })
-      .catch(() => undefined);
+      .catch(() => live && extraColors[0] && setColors(extraColors[0].colour));
     return () => {
       live = false;
     };
   }, [cls]);
+  const variants = [...hotel.map((f) => ({ label: `${f.sprite}: ${f.name}`, colour: f.colour })), ...extraColors];
   const [tick, setTick] = useState(0);
   const canvas = useRef<HTMLCanvasElement>(null);
 
@@ -94,8 +119,11 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
   const floorPixels = useMemo(() => {
     const highlight = new Set<string>();
     if (showFootprint) for (const p of placed) footprint(p.x, p.y, p.setup.dims, p.setup.direction).forEach((t) => highlight.add(t));
-    return drawFloor(room, { floor, background, grid, highlight });
-  }, [room, placed, floor, background, grid, showFootprint]);
+    const style = { floor, grid, highlight };
+    return transparent
+      ? { black: drawFloor(room, { ...style, background: '#000000' }), white: drawFloor(room, { ...style, background: '#ffffff' }) }
+      : { black: drawFloor(room, { ...style, background }), white: undefined };
+  }, [room, placed, floor, background, grid, showFootprint, transparent]);
 
   const moves = placed.some((p) => p.animator.moves);
   const layersNow = useRef<{ room: RoomLayout; layers: { layer: Layer; x: number; y: number }[] }>({ room, layers: [] });
@@ -110,7 +138,7 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
       c.width = room.width;
       c.height = room.height;
       try {
-        c.getContext('2d')!.putImageData(composite(doc, room, floorPixels, placements), 0, 0);
+        c.getContext('2d')!.putImageData(composite(doc, room, floorPixels.black, placements, floorPixels.white), 0, 0);
       } catch (e) {
         console.error(e);
       }
@@ -164,6 +192,13 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
   }, []);
   const shownZoom = zoom || Math.max(1, Math.min(4, Math.floor(stageWidth / room.width)));
 
+  const savePicture = () => {
+    const c = canvas.current;
+    if (!c) return;
+    const img = c.getContext('2d')!.getImageData(0, 0, c.width, c.height);
+    download(encodePng(new Uint8Array(img.data.buffer), c.width, c.height), `${cls || 'furni'}_${probe?.direction ?? direction}.png`, 'image/png');
+  };
+
   const letters = probe?.letters ?? [];
   return (
     <div className="preview">
@@ -194,10 +229,10 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
         <div className="row">
           <span>Colours</span>
           <input className="colors" placeholder="#FFFFFF,#F7EBBC (items_definitions.colour)" value={colors} onChange={(e) => setColors(e.target.value)} />
-          {hotel.length > 0 && (
-            <select value={hotel.find((f) => f.colour === colors)?.sprite ?? ''} onChange={(e) => setColors(hotel.find((f) => f.sprite === e.target.value)?.colour ?? '')} title="Colour variants in the hotel (items_definitions)">
-              <option value="">hotel colours…</option>
-              {hotel.map((f) => <option key={f.id} value={f.sprite}>{f.sprite}: {f.name}</option>)}
+          {variants.length > 0 && (
+            <select value={variants.findIndex((v) => v.colour === colors)} onChange={(e) => setColors(variants[+e.target.value]?.colour ?? colors)} title="Colour variants (the hotel's items_definitions, or the imported Flash file's)">
+              <option value={-1}>colours…</option>
+              {variants.map((v, i) => <option key={i} value={i}>{v.label}</option>)}
             </select>
           )}
         </div>
@@ -210,7 +245,8 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
           <label><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} /> grid</label>
           <label><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} /> tiles</label>
           <input type="color" value={floor} onChange={(e) => setFloor(e.target.value)} title="Floor" />
-          <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} title="Background" />
+          <label title="Draw the room on a transparent background (saved pictures keep it)"><input type="checkbox" checked={transparent} onChange={(e) => setTransparent(e.target.checked)} /> transparent</label>
+          {!transparent && <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} title="Background" />}
           <select value={zoom} onChange={(e) => setZoom(+e.target.value)}>
             <option value={0}>fit</option>
             {[1, 2, 3, 4].map((z) => <option key={z} value={z}>{z}×</option>)}
@@ -219,12 +255,15 @@ export function Preview({ doc, furni, rev, selected, onPick }: Props) {
       </div>
       <div className="preview-stage" ref={stage}>
         {probe ? (
-          <canvas ref={canvas} onClick={pick} style={{ width: room.width * shownZoom, height: room.height * shownZoom }} title="Click a layer to select its member" />
+          <canvas ref={canvas} onClick={pick} className={transparent ? 'checker' : undefined} style={{ width: room.width * shownZoom, height: room.height * shownZoom }} title="Click a layer to select its member" />
         ) : (
           <p className="muted">No floor furni layers found (layer a: &lt;class&gt;_a_0_&lt;w&gt;_&lt;l&gt;_&lt;dir&gt;_&lt;frame&gt;).</p>
         )}
       </div>
-      {selected !== null && <p className="muted small">Selected member #{selected}</p>}
+      <div className="row">
+        <button disabled={!probe} onClick={savePicture} title="The room as drawn now, as a PNG">Save picture</button>
+        {selected !== null && <span className="muted small">Selected member #{selected}</span>}
+      </div>
     </div>
   );
 }

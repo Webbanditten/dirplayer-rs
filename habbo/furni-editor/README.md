@@ -33,9 +33,44 @@ npx vite build -c habbo/furni-editor/vite.config.js  # static build in habbo/fur
   on and off, the tiles the furni covers (as Odin counts them) and click-to-select.
 - **New furni from this**: renames every member of the class, its fields and the alias and asset indexes, for a new
   furni based on an existing one.
+- **Import Flash furni**: a Flash-era furni (`<sprite>.swf`, button or drop it on the window) becomes a Shockwave cast,
+  ready to save and edit; "32 px" also converts the small pictures (`s_` members). See below.
+- The room can be drawn on a transparent background (rendered on black and on white, alpha from the difference), and
+  **Save picture** downloads it as a PNG.
 
 Transparent pixels are written the way Habbo's white-keyed inks (8, 36, ...) expect: palette index 0 in an 8-bit member,
 white (with alpha 0) in a 32-bit one.
+
+## Flash furni
+
+`src/flash.ts` (rules) on top of the Rust `SwfDocument` (`vm-rust/src/editor/swf.rs`: binary data, symbol names,
+lossless and JPEG bitmaps, alpha un-premultiplied; zlib `CWS` and plain `FWS` files, not LZMA `ZWS`). The XML
+(`_assets`, `_logic`, `_visualization`, `_index`) and the pictures, exported as `<sprite>_<asset>`, map to the Shockwave
+client's conventions the way the hotel's own converted casts have them (cf. Quackster's Elias, which does the same with
+JPEXS, swfmill and a Director projector):
+
+| Flash | Shockwave cast |
+|---|---|
+| `<sprite>_64_<layer>_<dir>_<frame>`, x, y | `<sprite>_<layer>_0_<x>_<y>_<dir>_<frame>` (logic.xml dimensions), registration point (x − 32, y) |
+| `_32_` pictures | `s_<sprite>_...`, (x − 16, y) |
+| `_64_sd_<dir>_0` / `_icon_a`, `_icon_<l>` | `<sprite>_sd_<dir>` / `<sprite>_small`, `<sprite>_small_<l>` |
+| `source` (+ `flipH`) with the source's offsets | `memberalias.index` line (`*` = mirrored) |
+| `source` with other offsets | a member of its own (mirrored copy: registration x = width − x − 32) |
+| layer `z`, per-direction `z` | `#zshift: [z]`, 8 entries (direction d and d + 1) |
+| `alpha`, ink `ADD`/`SUBTRACT`/`LIGHTEN`/`DARKEN`, `ignoreMouse` | `#blend` (alpha / 255 × 100), `#ink` 33/35/37/39, `#transparent: 1` |
+| layers in `<colors>` | `#ink: 41` (tinted by the part colour) |
+| `<animations>` (id < 100) | `.data`: animation n = state n + 1; `frames`, `loop` (loopCount), `delay` (frameRepeat), `random` |
+| `<colors>` | the preview's colour variants, as `items_definitions.colour` strings |
+
+Pictures are stored 32-bit with their alpha. Every layer and direction gets a frame 0 (a 1x1 placeholder if Flash has
+none), which the client's layer detection needs. The cast itself is built from a template, the hotel's
+`hh_furni_xx_chair_norja.cct` (localStorage `furniEditor.template` picks another), whose members are replaced, so the
+container and chunk layout are Director's. Checked: chair_norja.swf gives Sulake's chair_norja cast (same member names
+and registration points, same aliases and zshift); rare_dragonlamp, tv_flat and ads_calip_lava look like the hotel's
+casts in the preview, and the converted lava lamp, dragon lamp and sofa load and draw in the web client.
+
+Not converted: wall items (their `leftwall`/`rightwall` naming), transition animations (ids 100+), Flash inks without a
+Shockwave equivalent (MULTIPLY, SCREEN; reported in the status line).
 
 ## Rules it follows
 

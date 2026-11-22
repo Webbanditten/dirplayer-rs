@@ -156,10 +156,25 @@ export function sprites(room: RoomLayout, placements: Placement[]): SpriteSpec[]
   return out;
 }
 
-export function composite(doc: CastDocument, room: RoomLayout, floor: Uint8Array, placements: Placement[]): ImageData {
-  const spec = { width: room.width, height: room.height, sprites: sprites(room, placements) };
-  const rgba = doc.render(JSON.stringify(spec), floor);
-  return new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), room.width, room.height);
+/** Draw the placements on `floor`. With `floorOnWhite` (the same floor on a white background instead of black) the
+ *  background comes out transparent: the room is drawn on both, and each pixel's alpha is what the two renders tell
+ *  apart (where they agree it's opaque, where black shows through as black and white as white it's see-through). */
+export function composite(doc: CastDocument, room: RoomLayout, floor: Uint8Array, placements: Placement[], floorOnWhite?: Uint8Array): ImageData {
+  const spec = JSON.stringify({ width: room.width, height: room.height, sprites: sprites(room, placements) });
+  const a = doc.render(spec, floor);
+  if (floorOnWhite) {
+    const b = doc.render(spec, floorOnWhite);
+    for (let i = 0; i < a.length; i += 4) {
+      const alpha = 255 - Math.max(b[i] - a[i], b[i + 1] - a[i + 1], b[i + 2] - a[i + 2], 0);
+      if (alpha <= 0) {
+        a[i] = a[i + 1] = a[i + 2] = a[i + 3] = 0;
+        continue;
+      }
+      for (let k = 0; k < 3; k++) a[i + k] = Math.min(255, Math.round((a[i + k] * 255) / alpha));
+      a[i + 3] = alpha;
+    }
+  }
+  return new ImageData(new Uint8ClampedArray(a.buffer, a.byteOffset, a.byteLength), room.width, room.height);
 }
 
 /** The tiles a furni covers from (x, y), as Odin counts them (AffectedTile): `dims` = [length, width] from the member
