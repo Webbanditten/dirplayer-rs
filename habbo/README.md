@@ -46,6 +46,11 @@ Debug switches (env):
 - `LOCAL_ASSETS=<dir>`: serve a file from that folder instead of prod when its name matches the requested asset (try a
   rebuilt cast, e.g. `hh_room_private_wc.cct`, before uploading it).
 
+## Furni editor
+
+`furni-editor/`: edit furni casts in the browser (layers, directions, frames, registration points, images, `.props` /
+`.data`), with a room preview drawn by DirPlayer, and save the cast. See [furni-editor/README.md](furni-editor/README.md).
+
 ## Room photographer
 
 `photographer/`: a small service that photographs rooms (no avatars, pets, chat or interface) with this harness in
