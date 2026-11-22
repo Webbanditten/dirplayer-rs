@@ -27,7 +27,7 @@ export interface GridModel {
 }
 
 /** The class's bitmaps as layers x directions x frames (own members and memberalias.index names). */
-export function gridModel(furni: Furni, smallZoom = false): GridModel {
+export function gridModel(furni: Furni, smallZoom = furni.isSmallCast()): GridModel {
   const cls = (smallZoom ? 's_' : '') + furni.className();
   const lowerCls = cls.toLowerCase();
   const rows = new Map<string, LayerRow>();
@@ -101,7 +101,7 @@ function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc:
 }
 
 export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror, onAddLight }: Props) {
-  const g = gridModel(furni, small);
+  const g = gridModel(furni, small || furni.isSmallCast());
   const dirsUsed = [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
   const nextLetter = String.fromCharCode(97 + g.rows.length);
   return (

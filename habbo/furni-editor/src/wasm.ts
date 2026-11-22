@@ -30,6 +30,18 @@ export function download(bytes: Uint8Array, name: string, type = 'application/oc
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Several files at once (an empty list when cancelled). */
+export function pickFiles(accept: string): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.multiple = true;
+    input.onchange = () => resolve([...(input.files ?? [])]);
+    input.click();
+  });
+}
+
 export function pickFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input');

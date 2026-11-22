@@ -415,3 +415,58 @@ export function lightRamp(color: number, strength = 1): number[] {
   }
   return out;
 }
+
+/**
+ * Half size, for the small (32 px) version of a furni: every 2x2 block becomes one pixel. Pixel art keeps its look by
+ * three rules: a block with an outline pixel (dark, luminance under 64) takes the darkest one, so 1 px outlines stay
+ * closed; a block that is mostly background stays background; otherwise it takes its commonest colour (32-bit:
+ * the average of its visible pixels), so surfaces stay crisp instead of blurred.
+ */
+export function halve(img: PaintImage, palette: number[]): PaintImage {
+  const w = Math.max(1, Math.ceil(img.w / 2)), h = Math.max(1, Math.ceil(img.h / 2));
+  const lum = (c: number) => 0.299 * ((c >> 16) & 255) + 0.587 * ((c >> 8) & 255) + 0.114 * (c & 255);
+  const block = (x: number, y: number) => {
+    const out: [number, number][] = [];
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+      const sx = x * 2 + dx, sy = y * 2 + dy;
+      if (sx < img.w && sy < img.h) out.push([sx, sy]);
+    }
+    return out;
+  };
+  if (img.kind === 'indexed') {
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const vals = block(x, y).map(([sx, sy]) => img.px[sy * img.w + sx]);
+        const seen = vals.filter((v) => v !== 0);
+        if (!seen.length) continue;
+        let dark = -1;
+        for (const v of seen) if (lum(palette[v] ?? 0) < 64 && (dark < 0 || lum(palette[v] ?? 0) < lum(palette[dark] ?? 0))) dark = v;
+        if (dark >= 0) { out[y * w + x] = dark; continue; }
+        if (vals.length - seen.length > seen.length) continue;
+        const count = new Map<number, number>();
+        for (const v of seen) count.set(v, (count.get(v) ?? 0) + 1);
+        out[y * w + x] = [...count].sort((a, b) => b[1] - a[1])[0][0];
+      }
+    }
+    return { kind: 'indexed', w, h, px: out };
+  }
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      const cells = block(x, y).map(([sx, sy]) => (sy * img.w + sx) * 4);
+      const seen = cells.filter((i) => img.px[i + 3] >= 128);
+      const rgb = (i: number) => (img.px[i] << 16) | (img.px[i + 1] << 8) | img.px[i + 2];
+      let dark = -1;
+      for (const i of seen) if (lum(rgb(i)) < 64 && (dark < 0 || lum(rgb(i)) < lum(rgb(dark)))) dark = i;
+      if (dark >= 0) { out.set(img.px.subarray(dark, dark + 4), o); continue; }
+      if (cells.length - seen.length > seen.length || !seen.length) { out.set([255, 255, 255, 0], o); continue; }
+      let r = 0, g = 0, b = 0, a = 0;
+      for (const i of seen) { r += img.px[i]; g += img.px[i + 1]; b += img.px[i + 2]; a += img.px[i + 3]; }
+      const n = seen.length;
+      out.set([Math.round(r / n), Math.round(g / n), Math.round(b / n), Math.round(a / n)], o);
+    }
+  }
+  return { kind: 'rgba', w, h, px: out };
+}

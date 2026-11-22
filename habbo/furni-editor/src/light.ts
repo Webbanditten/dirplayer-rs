@@ -80,7 +80,7 @@ function nextLetter(furni: Furni, cls: string, data: LingoValue): string {
 
 /** Add a light layer to the furni. Returns a one-line summary. */
 export function addLight(doc: CastDocument, furni: Furni, o: LightOptions): string {
-  const cls = furni.className();
+  const cls = (furni.isSmallCast() ? 's_' : '') + furni.className();
   const own = ownDirections(furni);
   if (!own.length) throw new Error('The furni has no layer a to put a light on');
   const dir0 = own.includes(2) ? 2 : own[0];

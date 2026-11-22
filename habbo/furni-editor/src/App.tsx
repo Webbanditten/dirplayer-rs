@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile } from './wasm';
-import { buildCast, planFlash } from './flash';
+import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile, pickFiles } from './wasm';
+import { buildCast, planFlash, splitPlan } from './flash';
+import { largeFileName, makeSmall, smallFileName } from './small';
 import { ALIAS_INDEX, ASSET_INDEX, Furni, parseMemberName } from './furni';
 import { FurniGrid, gridModel } from './components/FurniGrid';
 import { Inspector, type ImportMode } from './components/Inspector';
@@ -26,12 +27,43 @@ function store(key: string, value: string) {
   }
 }
 
+/**
+ * Housekeeping embeds the editor (OdinCMS Areas/Housekeeping/Views/FurniEditor) as
+ * `?embed=housekeeping&parent=<the CMS origin>`. Messages only go to and come from that origin and the parent window:
+ * the page sends `open` (a furni's casts), `published` and `status`; the editor sends `ready` and `publish` (both casts).
+ * The editor never calls the CMS itself.
+ */
+const EMBED = (() => {
+  const q = new URLSearchParams(location.search);
+  if (q.get('embed') !== 'housekeeping' || window.parent === window) return null;
+  try {
+    return { origin: new URL(q.get('parent') ?? '').origin };
+  } catch {
+    return null;
+  }
+})();
+
+/** The other size of the open furni (the large and the small cast are edited as a pair). */
+interface Side {
+  doc: CastDocument;
+  name: string;
+  dirty: boolean;
+}
+
+/** The file name a furni's cast gets: hh_furni_xx_<class>.cct, or hh_furni_xx_s_<class>.cct for the small one. */
+function castName(f: Furni, fallback: string) {
+  const cls = f.className();
+  if (!cls) return fallback || 'cast.cct';
+  return f.isSmallCast() ? smallFileName(cls) : largeFileName(cls);
+}
+
 export function App() {
   const [ready, setReady] = useState(false);
   const [doc, setDoc] = useState<CastDocument | null>(null);
   const [fileName, setFileName] = useState('');
   const [rev, setRev] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [other, setOther] = useState<Side | null>(null);
   const [selected, setSelected] = useState<{ slot: number; alias?: string } | null>(null);
   const [status, setStatus] = useState('');
   const [tab, setTab] = useState<'furni' | 'members'>('furni');
@@ -52,15 +84,19 @@ export function App() {
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
-      if (dirty) e.preventDefault();
+      if (dirty || other?.dirty) e.preventDefault();
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, [dirty, other]);
+  const anyDirty = dirty || !!other?.dirty;
 
+  /** Show a new furni (and its other size, when there is one), dropping the open ones. */
   const show = useCallback(
-    (next: CastDocument, name: string, changed: boolean) => {
+    (next: CastDocument, name: string, changed: boolean, pair: Side | null = null) => {
       doc?.free();
+      other?.doc.free();
+      setOther(pair);
       setDoc(next);
       setPainting(null);
       setFileName(name);
@@ -68,29 +104,38 @@ export function App() {
       setSelected(null);
       setRev((r) => r + 1);
     },
-    [doc],
+    [doc, other],
   );
 
+  /** Open a cast, or a large and a small cast together (the large one is shown first). */
   const open = useCallback(
-    (bytes: Uint8Array, name: string) => {
-      if (dirty && !confirm('Discard the changes to the open cast?')) return;
+    (bytes: Uint8Array, name: string, pair?: { bytes: Uint8Array; name: string }) => {
+      if (anyDirty && !confirm('Discard the changes to the open cast?')) return;
+      let next: CastDocument | null = null;
       try {
-        const next = new CastDocument(bytes);
-        show(next, name, false);
+        next = new CastDocument(bytes);
+        let pairDoc = pair ? new CastDocument(pair.bytes) : null;
+        let [mainName, pairName] = [name, pair?.name ?? ''];
+        if (pairDoc && new Furni(next).isSmallCast() && !new Furni(pairDoc).isSmallCast()) {
+          [next, pairDoc] = [pairDoc, next];
+          [mainName, pairName] = [pairName, mainName];
+        }
+        show(next, mainName, false, pairDoc ? { doc: pairDoc, name: pairName, dirty: false } : null);
         setFlashColors([]);
         const f = new Furni(next);
-        setStatus(`Opened ${name}: ${f.members.length} members, class ${f.className() || '?'}`);
+        setStatus(`Opened ${mainName}${pairDoc ? ` and ${pairName}` : ''}: ${f.members.length} members, class ${f.className() || '?'}`);
       } catch (e) {
+        next?.free();
         setStatus(`Couldn't open ${name}: ${e}`);
       }
     },
-    [dirty, show],
+    [anyDirty, show],
   );
 
   /** A Flash furni (.swf) converted into a new cast, built on a template cast from the hotel (for its Director-written
    *  container) whose members are replaced. */
   const importFlash = async (file: File) => {
-    if (dirty && !confirm('Discard the changes to the open cast?')) return;
+    if (anyDirty && !confirm('Discard the changes to the open cast?')) return;
     setStatus(`Converting ${file.name}…`);
     let swf: SwfDocument | null = null;
     try {
@@ -99,13 +144,20 @@ export function App() {
       const template = `hh_furni_xx_${templateClass.trim() || 'chair_norja'}.cct`;
       const res = await fetch(host.replace(/\/?$/, '/') + template);
       if (!res.ok) throw new Error(`couldn't load the template cast ${template} (HTTP ${res.status})`);
-      const next = new CastDocument(new Uint8Array(await res.arrayBuffer()));
-      buildCast(next, swf, plan);
-      show(next, `hh_furni_xx_${plan.sprite}.cct`, true);
+      const templateBytes = new Uint8Array(await res.arrayBuffer());
+      const sizes = splitPlan(plan);
+      const next = new CastDocument(templateBytes);
+      buildCast(next, swf, sizes.large);
+      let small: CastDocument | null = null;
+      if (sizes.small) {
+        small = new CastDocument(templateBytes);
+        buildCast(small, swf, sizes.small);
+      }
+      show(next, largeFileName(plan.sprite), true, small ? { doc: small, name: smallFileName(plan.sprite), dirty: true } : null);
       setFlashColors(plan.colors.map((c) => ({ label: `flash colour ${c.id}: ${c.colour}`, colour: c.colour })));
       const aliases = plan.fields.find((f) => f.name === ALIAS_INDEX)?.text.split('\n').length ?? 0;
       setStatus(
-        `Converted ${file.name}: ${plan.sprite}, ${plan.dims[0]}×${plan.dims[1]}, ${plan.bitmaps.length} pictures, ${aliases} aliases, ` +
+        `Converted ${file.name}: ${plan.sprite}, ${plan.dims[0]}×${plan.dims[1]}, ${plan.bitmaps.length} pictures${small ? ' (with a small cast)' : ''}, ${aliases} aliases, ` +
           `${plan.fields.map((f) => f.name).join(', ')}` + (plan.colors.length ? `; ${plan.colors.length} colour variants` : '') +
           (plan.warnings.length ? `. Warnings: ${plan.warnings.slice(0, 4).join('; ')}${plan.warnings.length > 4 ? ` (+${plan.warnings.length - 4})` : ''}` : ''),
       );
@@ -128,39 +180,159 @@ export function App() {
     }
   }, []);
 
-  const openFile = async () => {
-    const file = await pickFile('.cct,.cst');
-    if (file) open(new Uint8Array(await file.arrayBuffer()), file.name);
+  /** One cast, or two (a furni's large and small cast) picked together. */
+  const openFiles = async (files: File[]) => {
+    const casts = files.filter((f) => /\.(cct|cst)$/i.test(f.name)).slice(0, 2);
+    if (!casts.length) return;
+    const [a, b] = await Promise.all(casts.map(async (f) => ({ bytes: new Uint8Array(await f.arrayBuffer()), name: f.name })));
+    open(a.bytes, a.name, b);
   };
+  const openFile = async () => openFiles(await pickFiles('.cct,.cst'));
 
+  /** The large cast and, when the hotel has one, the small cast. */
   const openFromHotel = async () => {
-    const name = `hh_furni_xx_${className.trim()}.cct`;
+    const cls = className.trim().replace(/^hh_furni_xx_(s_)?/i, '').replace(/\.cct$/i, '');
+    const name = largeFileName(cls);
     store('furniEditor.host', host);
-    store('furniEditor.class', className.trim());
+    store('furniEditor.class', cls);
     setStatus(`Loading ${name}…`);
+    const get = async (file: string) => {
+      const res = await fetch(host.replace(/\/?$/, '/') + file);
+      return res.ok ? { bytes: new Uint8Array(await res.arrayBuffer()), name: file } : null;
+    };
     try {
-      const res = await fetch(host.replace(/\/?$/, '/') + name);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      open(new Uint8Array(await res.arrayBuffer()), name);
+      const [large, small] = await Promise.all([get(name), get(smallFileName(cls)).catch(() => null)]);
+      const first = large ?? small;
+      if (!first) throw new Error('not on the hotel (HTTP 404)');
+      open(first.bytes, first.name, large && small ? small : undefined);
     } catch (e) {
       setStatus(`Couldn't load ${name}: ${e}`);
     }
   };
 
+  /** Save the shown cast, and the other size too when it has changes. */
   const save = () => {
     if (!doc || !furni) return;
-    const name = furni.className() ? `hh_furni_xx_${furni.className()}.cct` : fileName || 'cast.cct';
-    try {
-      const bytes = doc.save();
+    const saveOne = (d: CastDocument, name: string) => {
+      const bytes = d.save();
       // Check the result opens before handing it out.
       new CastDocument(bytes).free();
       download(bytes, name);
+      return `${name} (${bytes.length.toLocaleString()} bytes)`;
+    };
+    try {
+      const done = [saveOne(doc, castName(furni, fileName))];
       setDirty(false);
-      setStatus(`Saved ${name} (${bytes.length.toLocaleString()} bytes)`);
+      if (other?.dirty) {
+        done.push(saveOne(other.doc, castName(new Furni(other.doc), other.name)));
+        setOther({ ...other, dirty: false });
+      }
+      setStatus(`Saved ${done.join(' and ')}`);
     } catch (e) {
       setStatus(`Save failed: ${e}`);
     }
   };
+
+  // --- Housekeeping ---
+  const [hotelFurni, setHotelFurni] = useState<{ sprite: string; madeHere: boolean } | null>(null);
+  const toParent = (message: unknown, transfer: Transferable[] = []) => EMBED && window.parent.postMessage(message, EMBED.origin, transfer);
+  useEffect(() => {
+    if (!EMBED || !ready) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== EMBED.origin || e.source !== window.parent) return;
+      const m = e.data ?? {};
+      if (m.type === 'open' && (m.large?.bytes instanceof ArrayBuffer || m.small?.bytes instanceof ArrayBuffer)) {
+        const first = m.large ?? m.small;
+        const pair = m.large && m.small ? { bytes: new Uint8Array(m.small.bytes), name: String(m.small.name) } : undefined;
+        open(new Uint8Array(first.bytes), String(first.name), pair);
+        if (Array.isArray(m.colors)) setFlashColors(m.colors.filter((c: { colour?: unknown }) => typeof c?.colour === 'string'));
+        setHotelFurni({ sprite: String(m.sprite ?? ''), madeHere: !!m.madeHere });
+        if (!m.madeHere) setStatus(`${m.sprite} is the hotel's own furni: it is never written over. "New furni from this…" makes a copy you can publish.`);
+        else if (m.revision) setStatus(`Opened ${m.sprite} r${m.revision} (an earlier version: publishing it makes a new revision)`);
+      } else if (m.type === 'published') {
+        setStatus(String(m.text ?? ''));
+        if (m.ok) {
+          setDirty(false);
+          setOther((o) => (o ? { ...o, dirty: false } : o));
+          setHotelFurni({ sprite: String(m.sprite ?? ''), madeHere: true });
+        }
+      } else if (m.type === 'status') {
+        setStatus(String(m.text ?? ''));
+      }
+    };
+    window.addEventListener('message', onMessage);
+    toParent({ type: 'ready' });
+    return () => window.removeEventListener('message', onMessage);
+  }, [ready, open]);
+
+  /** Hand both casts to Housekeeping, which checks them and asks before anything is written. */
+  const publish = () => {
+    if (!doc || !furni) return;
+    const cls = furni.className();
+    if (!cls) return setStatus('The cast has no furni class to publish');
+    if (hotelFurni && !hotelFurni.madeHere && hotelFurni.sprite.toLowerCase() === cls.toLowerCase())
+      return setStatus(`${cls} is the hotel's own furni and is never written over: "New furni from this…" first, then publish the copy`);
+    try {
+      const mine = doc.save();
+      const theirs = other?.doc.save();
+      const [large, small] = furni.isSmallCast() ? [theirs, mine] : [mine, theirs];
+      if (!large) return setStatus(`Only the small cast is open: open or make the large one (${largeFileName(cls)}) too`);
+      const buf = (b: Uint8Array) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+      const msg = { type: 'publish', sprite: cls, large: buf(large), small: small ? buf(small) : undefined, colour: flashColors[0]?.colour };
+      toParent(msg, [msg.large, ...(msg.small ? [msg.small] : [])]);
+      setStatus(`Sent ${cls} to Housekeeping: check the report there and confirm`);
+    } catch (e) {
+      setStatus(`Couldn't save the casts: ${e}`);
+    }
+  };
+
+  // --- large and small ---
+  const smallShown = furni?.isSmallCast() ?? false;
+  /** The member of the other size that matches `name` (s_ in front for the small one; icons are the same). */
+  const counterpart = (f: Furni, name: string, toSmall: boolean) => {
+    const target = toSmall ? (/^s_/i.test(name) || /_small(_[a-z])?$/i.test(name) ? name : 's_' + name) : name.replace(/^s_/i, '');
+    return f.members.find((m) => m.name.toLowerCase() === target.toLowerCase())?.slot;
+  };
+  const switchSize = (toSmall: boolean) => {
+    if (!doc || !furni || toSmall === smallShown) return;
+    const selName = sel ? furni.bySlot.get(sel.slot)?.name : undefined;
+    const paintName = painting !== null ? furni.bySlot.get(painting)?.name : undefined;
+    let target: Side;
+    if (other) {
+      target = other;
+    } else if (toSmall) {
+      const cls = furni.className();
+      if (!confirm(`${cls} has no small (32 px) cast open. Make ${smallFileName(cls)} from the large pictures (halved)?`)) return;
+      try {
+        target = { doc: makeSmall(doc, cls), name: smallFileName(cls), dirty: true };
+      } catch (e) {
+        return setStatus(`Couldn't make the small version: ${e}`);
+      }
+    } else {
+      return setStatus('No large cast is open with this one: open both files together (pick or drop the two .cct)');
+    }
+    setOther({ doc, name: fileName, dirty });
+    setDoc(target.doc);
+    setFileName(target.name);
+    setDirty(target.dirty);
+    const f = new Furni(target.doc);
+    const nextSel = selName ? counterpart(f, selName, toSmall) : undefined;
+    const nextPaint = paintName ? counterpart(f, paintName, toSmall) : undefined;
+    setSelected(nextSel ? { slot: nextSel } : null);
+    setPainting(nextPaint && f.bySlot.get(nextPaint)?.bitmap ? nextPaint : null);
+    setRev((r) => r + 1);
+    setStatus(`${toSmall ? 'Small (32 px)' : 'Large (64 px)'}: ${target.name}${other ? '' : ', made from the large pictures'}`);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.code === 'KeyS' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        switchSize(!smallShown);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const readImage = async (given?: File) => {
     const file = given ?? (await pickFile(IMAGE_TYPES));
@@ -288,22 +460,46 @@ export function App() {
     const old = furni.className();
     const next = prompt(`New class name for a copy of ${old} (members and texts are renamed)`, `${old}_2`)?.trim();
     if (!next || next === old) return;
-    if (!/^[A-Za-z0-9_]+$/.test(next)) return setStatus('Class names are letters, digits and _');
+    if (!/^[a-z0-9_]{1,64}$/.test(next)) return setStatus('Class names are lower-case letters, digits and _ (at most 64), as the hotel takes them');
+    if (/^(s_|poster)/.test(next)) return setStatus('s_ names a small cast and poster casts are numbered by the catalogue: pick another name');
     const re = new RegExp(`^(s_)?${old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[_.]|$)`, 'i');
     const swap = (s: string) => s.replace(re, (_m, small) => (small ?? '') + next);
-    edit(`Renamed the furni ${old} to ${next}`, () => {
-      for (const m of furni.members) if (re.test(m.name)) doc.setName(m.slot, swap(m.name));
+    // Members borrowed from other furni (drken_pixel, sofachair_silo_d_...) get the new name in front too: a furni's
+    // cast may only name its own members (the hotel checks), and the copy stays independent of the other furni.
+    const shared = new Set([ALIAS_INDEX, ASSET_INDEX, 'copyright']);
+    const rename = (d: CastDocument, f: Furni) => {
+      const borrowed = new Map<string, string>();
+      for (const m of f.members) {
+        if (re.test(m.name)) d.setName(m.slot, swap(m.name));
+        else if (m.name && m.type !== 'palette' && !shared.has(m.name.toLowerCase())) {
+          borrowed.set(m.name.toLowerCase(), `${next}_${m.name}`);
+          d.setName(m.slot, `${next}_${m.name}`);
+        }
+      }
+      const part = (p: string) => {
+        const star = p.endsWith('*') ? '*' : '';
+        const name = star ? p.slice(0, -1) : p;
+        return (borrowed.get(name.toLowerCase()) ?? swap(name)) + star;
+      };
       for (const field of [ALIAS_INDEX, ASSET_INDEX]) {
-        const slot = furni.fieldSlot(field);
+        const slot = f.fieldSlot(field);
         if (!slot) continue;
-        const text = doc.text(slot) ?? '';
-        doc.setText(
+        const text = d.text(slot) ?? '';
+        d.setText(
           slot,
           field === ASSET_INDEX
-            ? text.replace(new RegExp(`"${old}"`, 'gi'), `"${next}"`)
-            : text.split('\n').map((l) => l.split('=').map((p) => swap(p.trim())).join('=')).join('\n'),
+            ? text.replace(new RegExp(`"(s_)?${old}"`, 'gi'), (_m, small) => `"${small ?? ''}${next}"`)
+            : text.split(/\r?\n|\r/).map((l) => l.split('=').map((p) => part(p.trim())).join('=')).join('\n'),
         );
       }
+    };
+    edit(`Renamed the furni ${old} to ${next}${other ? ' (both sizes)' : ''}`, () => {
+      rename(doc, furni);
+      if (other) {
+        rename(other.doc, new Furni(other.doc));
+        setOther({ ...other, name: castName(new Furni(other.doc), other.name), dirty: true });
+      }
+      setFileName(castName(new Furni(doc), fileName));
     });
   };
 
@@ -321,7 +517,7 @@ export function App() {
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
     e.preventDefault();
-    if (/\.(cct|cst)$/i.test(file.name)) open(new Uint8Array(await file.arrayBuffer()), file.name);
+    if (/\.(cct|cst)$/i.test(file.name)) openFiles([...e.dataTransfer.files]);
     else if (/\.swf$/i.test(file.name)) importFlash(file);
     else if (/^image\//.test(file.type) || /\.(png|gif|jpe?g)$/i.test(file.name)) {
       const m = sel && furni?.bySlot.get(sel.slot);
@@ -345,10 +541,26 @@ export function App() {
         </button>
         <label title="Also convert the 32 px pictures (s_ members)"><input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} /> 32 px</label>
         <span className="sep" />
-        <button className="primary" onClick={save} disabled={!doc}>Save .cct</button>
+        <span className="sep" />
+        <span className="segmented" title="The large (64 px) and the small (32 px) cast of the furni (Alt+S switches)">
+          <button className={doc && !smallShown ? 'on' : ''} onClick={() => switchSize(false)} disabled={!doc}>64 px</button>
+          <button className={doc && smallShown ? 'on' : ''} onClick={() => switchSize(true)} disabled={!doc}>
+            32 px{doc && !smallShown && !other ? ' +' : ''}
+          </button>
+        </span>
+        <span className="sep" />
+        <button className="primary" onClick={save} disabled={!doc}>{other?.dirty && dirty ? 'Save both .cct' : 'Save .cct'}</button>
         <button onClick={cloneAs} disabled={!doc} title="Rename every member of the class, for a new furni based on this one">New furni from this…</button>
+        {EMBED && (
+          <button className="primary" onClick={publish} disabled={!doc} title="Housekeeping checks the casts and asks before publishing">
+            Publish to hotel…
+          </button>
+        )}
         <span className="spacer" />
-        <span className="muted">{fileName}{dirty ? ' (changed)' : ''}</span>
+        <span className="muted">
+          {fileName}{dirty ? ' (changed)' : ''}
+          {other ? ` · ${other.name}${other.dirty ? ' (changed)' : ''}` : ''}
+        </span>
       </header>
       {!doc || !furni ? (
         <main className="welcome">

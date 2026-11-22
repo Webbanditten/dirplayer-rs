@@ -105,6 +105,7 @@ export class Furni {
   bySlot = new Map<number, Member>();
   names = new Map<string, NameEntry>();
   private palettes = new Map<number, number[]>();
+  private cached: { cls?: string; small?: boolean } = {};
 
   constructor(readonly doc: CastDocument) {
     this.reload();
@@ -115,6 +116,7 @@ export class Furni {
     this.members = JSON.parse(this.doc.membersJson());
     this.bySlot = new Map(this.members.map((m) => [m.slot, m]));
     this.palettes.clear();
+    this.cached = {};
     const names = new Map<string, NameEntry>();
     for (const m of this.members) if (m.name) names.set(m.name.toLowerCase(), { slot: m.slot, flip: false });
     // The Resource Manager: memberalias.index line by line; a line copies its target's current entry (mirrored with
@@ -157,8 +159,33 @@ export class Furni {
     return m && m.type === 'bitmap' && m.bitmap ? { ...e!, member: m } : undefined;
   }
 
-  /** The furni's class: asset.index's #id, else the commonest prefix of layer member names. */
+  /** A small (32 px) cast of its own, hh_furni_xx_s_<class>.cct: s_<class> layer members and no <class> ones (casts
+   *  borrow single members of other furni, so only the furni's own class counts). */
+  isSmallCast(): boolean {
+    return (this.cached.small ??= this.findSmall());
+  }
+
+  private findSmall(): boolean {
+    const cls = this.className().toLowerCase();
+    if (!cls) return false;
+    let small = false;
+    for (const m of this.members) {
+      const p = parseMemberName(m.name);
+      if (!p) continue;
+      const c = p.cls.toLowerCase();
+      if (c === cls) return false;
+      if (c === 's_' + cls) small = true;
+    }
+    return small || this.members.some((m) => m.name.toLowerCase() === `s_${cls}.props`);
+  }
+
+  /** The furni's class: asset.index's #id, else the commonest class of the layer members, both sizes counted together
+   *  without s_ (a small cast of chair_norja has the class chair_norja). */
   className(): string {
+    return (this.cached.cls ??= this.findClass());
+  }
+
+  private findClass(): string {
     // A cast can hold both sizes, each with its own asset.index (doorD: "doorD" and "s_doorD"); the class is the 64 px one.
     const asset = lingoValue(this.text(ASSET_INDEX) ?? '');
     const id = prop(asset, 'id');
@@ -166,12 +193,12 @@ export class Furni {
     const count = new Map<string, number>();
     for (const m of this.members) {
       const p = parseMemberName(m.name);
-      if (p && !p.cls.startsWith('s_')) count.set(p.cls, (count.get(p.cls) ?? 0) + 1);
+      if (p) count.set(p.cls.replace(/^s_/, ''), (count.get(p.cls.replace(/^s_/, '')) ?? 0) + 1);
     }
     const best = [...count].sort((a, b) => b[1] - a[1])[0];
     if (best) return best[0];
     const props = this.members.find((m) => m.name.endsWith('.props'));
-    return props ? props.name.slice(0, -6) : '';
+    return props ? props.name.slice(0, -6).replace(/^s_/, '') : '';
   }
 
   classes(): string[] {
@@ -239,8 +266,9 @@ export function stateNames(data: LingoValue): string[] {
 }
 
 export function floorSetup(furni: Furni, options: FloorOptions): FloorSetup | null {
-  const cls = (options.small ? 's_' : '') + furni.className();
-  const xFactor = options.small ? 32 : 64;
+  const small = options.small ?? furni.isSmallCast();
+  const cls = (small ? 's_' : '') + furni.className();
+  const xFactor = small ? 32 : 64;
   const props = lingoValue(furni.text(cls + '.props') ?? '[:]');
   const data = lingoValue((furni.text(cls + '.data') ?? '').replace(/[\r\n]/g, ''));
   const state = options.state;
@@ -337,7 +365,7 @@ export function floorSetup(furni: Furni, options: FloorOptions): FloorSetup | nu
 /** The directions the furni can be turned to: those with a layer a member or memberalias.index name of their own (the
  *  client's rotate only moves to a direction whose member exists; a direction without one would draw direction 0's
  *  members, which never happens in a room). */
-export function ownDirections(furni: Furni, small = false): number[] {
+export function ownDirections(furni: Furni, small = furni.isSmallCast()): number[] {
   const cls = (small ? 's_' : '') + furni.className();
   const out = new Set<number>();
   const prefix = `${cls}_a_0_`.toLowerCase();

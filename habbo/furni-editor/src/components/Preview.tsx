@@ -96,8 +96,10 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
   const [tick, setTick] = useState(0);
   const canvas = useRef<HTMLCanvasElement>(null);
 
+  // A small cast of its own (hh_furni_xx_s_...) always shows small; a cast with both sizes has the checkbox.
+  const smallCast = useMemo(() => furni.isSmallCast(), [furni]);
   const hasSmall = useMemo(() => furni.members.some((m) => m.name.toLowerCase().startsWith('s_' + furni.className().toLowerCase() + '_')), [furni]);
-  const useSmall = small && hasSmall;
+  const useSmall = smallCast || (small && hasSmall);
   const probe = useMemo(() => floorSetup(furni, { direction, state, colors, shadow, small: useSmall }), [furni, direction, state, colors, shadow, useSmall]);
   const states = probe ? stateNames(probe.data) : ['default'];
   const own = useMemo(() => ownDirections(furni, useSmall), [furni, useSmall]);
@@ -119,7 +121,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
       if (!setup) return;
       placed.push({ setup, x: 1 + (allDirections ? i * span : 0), y: 1, animator: new Animator(setup.data, setup.letters, state) });
     });
-    const room = fitRoom(roomLayout({ cols, rows }), placed.map((p) => ({ x: p.x, y: p.y, layers: p.setup.layersAt() })));
+    const room = fitRoom(roomLayout({ cols, rows }, useSmall ? 32 : 64), placed.map((p) => ({ x: p.x, y: p.y, layers: p.setup.layersAt() })));
     return { room, placed };
   }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own]);
 
@@ -231,7 +233,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
           {!moves && <span className="muted">still</span>}
           <span className="spacer" />
           <label><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} /> shadow</label>
-          {hasSmall && <label><input type="checkbox" checked={small} onChange={(e) => setSmall(e.target.checked)} /> small (32)</label>}
+          {hasSmall && !smallCast && <label><input type="checkbox" checked={small} onChange={(e) => setSmall(e.target.checked)} /> small (32)</label>}
         </div>
         <div className="row">
           <span>Colours</span>

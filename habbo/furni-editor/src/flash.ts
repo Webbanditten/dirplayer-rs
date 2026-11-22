@@ -21,6 +21,7 @@
  * - Every layer and direction gets a frame 0 (a 1x1 placeholder if the Flash file has none), which the client's layer
  *   detection needs.
  */
+import { ALIAS_INDEX } from './furni';
 import type { CastDocument, SwfDocument } from '../../../vm-rust/pkg/vm_rust.js';
 
 interface SwfSummary {
@@ -356,4 +357,32 @@ export function buildCast(doc: CastDocument, swf: SwfDocument, plan: FlashPlan) 
     }
   });
   if (!plan.bitmaps.length) doc.delete(bitmapTpl.slot);
+}
+
+/**
+ * The hotel keeps the 32 px pictures in a cast of their own (hh_furni_xx_s_<sprite>.cct): a plan with both sizes split
+ * into the large plan and the small one (s_ members, s_ fields, the s_ alias lines, plus the icons, which both casts
+ * have). The small cast gets no asset.index, like the hotel's.
+ */
+export function splitPlan(plan: FlashPlan): { large: FlashPlan; small: FlashPlan | null } {
+  const isSmall = (n: string) => /^s_/i.test(n);
+  const isIcon = (n: string) => n.toLowerCase().startsWith(`${plan.sprite.toLowerCase()}_small`);
+  const aliases = (plan.fields.find((f) => f.name === ALIAS_INDEX)?.text ?? '').split('\n').filter((l) => l.trim());
+  const withAliases = (fields: FlashPlan['fields'], lines: string[]) => [
+    ...fields.filter((f) => f.name !== ALIAS_INDEX),
+    ...(lines.length ? [{ name: ALIAS_INDEX, text: lines.join('\n') }] : []),
+  ];
+  const large: FlashPlan = {
+    ...plan,
+    bitmaps: plan.bitmaps.filter((b) => !isSmall(b.name)),
+    fields: withAliases(plan.fields.filter((f) => !isSmall(f.name)), aliases.filter((l) => !isSmall(l))),
+  };
+  const smallBitmaps = plan.bitmaps.filter((b) => isSmall(b.name) || isIcon(b.name));
+  if (!smallBitmaps.some((b) => isSmall(b.name))) return { large, small: null };
+  const small: FlashPlan = {
+    ...plan,
+    bitmaps: smallBitmaps,
+    fields: withAliases(plan.fields.filter((f) => isSmall(f.name)), aliases.filter((l) => isSmall(l))),
+  };
+  return { large, small };
 }

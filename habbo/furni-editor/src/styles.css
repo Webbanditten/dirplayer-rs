@@ -128,3 +128,8 @@ code { font: 12px ui-monospace, Menlo, monospace; }
 
 .light-panel { border: 1px solid var(--accent); border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; background: var(--panel); }
 .light-panel input[type='range'] { width: 110px; }
+.segmented { display: inline-flex; }
+.segmented button { border-radius: 0; }
+.segmented button:first-child { border-radius: 4px 0 0 4px; }
+.segmented button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.segmented button.on { background: var(--select); border-color: var(--accent); font-weight: bold; }

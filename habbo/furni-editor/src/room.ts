@@ -15,6 +15,8 @@ export interface RoomSize {
 }
 
 export interface RoomLayout extends RoomSize {
+  /** tile width: 64, or 32 for the small room zoom (s_ members) */
+  tile: number;
   width: number;
   height: number;
   xOffset: number;
@@ -24,13 +26,13 @@ export interface RoomLayout extends RoomSize {
 const HEADROOM = 24;
 const THICKNESS = 8;
 
-export function roomLayout(size: RoomSize): RoomLayout {
-  const margin = 24;
-  const xOffset = margin + (size.rows - 1) * 32;
-  const yOffset = HEADROOM + 16;
-  const width = xOffset + (size.cols - 1) * 32 + 64 + margin;
-  const height = yOffset + (size.cols + size.rows - 2) * 16 + 16 + THICKNESS + margin;
-  return { ...size, width, height, xOffset, yOffset };
+export function roomLayout(size: RoomSize, tile = 64): RoomLayout {
+  const margin = 24, hw = tile / 2, hh = tile / 4;
+  const xOffset = margin + (size.rows - 1) * hw;
+  const yOffset = HEADROOM + hh;
+  const width = xOffset + (size.cols - 1) * hw + tile + margin;
+  const height = yOffset + (size.cols + size.rows - 2) * hh + hh + (THICKNESS * tile) / 64 + margin;
+  return { ...size, tile, width, height, xOffset, yOffset };
 }
 
 /** Grow the canvas so every sprite of `placements` (plus a margin) fits, moving the floor along. */
@@ -50,7 +52,7 @@ export function fitRoom(room: RoomLayout, placements: Placement[], margin = 16):
 }
 
 export function tileLoc(room: RoomLayout, x: number, y: number) {
-  return { locH: (x - y) * 32 + room.xOffset, locV: (x + y) * 16 + room.yOffset };
+  return { locH: ((x - y) * room.tile) / 2 + room.xOffset, locV: ((x + y) * room.tile) / 4 + room.yOffset };
 }
 
 function hex(c: string): [number, number, number] {
@@ -85,29 +87,30 @@ export function drawFloor(room: RoomLayout, style: FloorStyle): Uint8Array {
   const left = shade(top, 0.85);
   const right = shade(top, 0.7);
   const lit: [number, number, number] = [Math.min(255, top[0] + 40), Math.min(255, top[1] + 40), Math.min(255, top[2] + 40)];
+  const T = room.tile, hw = T / 2, hh = T / 4, thick = (THICKNESS * T) / 64;
   for (let ty = 0; ty < room.rows; ty++) {
     for (let tx = 0; tx < room.cols; tx++) {
       const { locH, locV } = tileLoc(room, tx, ty);
       const fill = style.highlight?.has(`${tx},${ty}`) ? lit : top;
-      // The diamond, row by row: half widths 2, 4, ... 32, 32, ... 2.
-      for (let r = 0; r < 32; r++) {
-        const half = r < 16 ? (r + 1) * 2 : (32 - r) * 2;
-        const y = locV - 16 + r;
-        for (let x = locH + 32 - half; x < locH + 32 + half; x++) {
-          const onEdge = style.grid && (x < locH + 32 - half + 2 || x >= locH + 32 + half - 2);
+      // The diamond, row by row: half widths 2, 4, ... hw, hw, ... 2.
+      for (let r = 0; r < hw; r++) {
+        const half = r < hh ? (r + 1) * 2 : (hw - r) * 2;
+        const y = locV - hh + r;
+        for (let x = locH + hw - half; x < locH + hw + half; x++) {
+          const onEdge = style.grid && (x < locH + hw - half + 2 || x >= locH + hw + half - 2);
           put(x, y, onEdge ? edge : fill);
         }
       }
       if (ty === room.rows - 1) {
-        for (let x = locH; x < locH + 32; x++) {
+        for (let x = locH; x < locH + hw; x++) {
           const y0 = locV + Math.floor((x - locH) / 2) + 1;
-          for (let y = y0; y < y0 + THICKNESS; y++) put(x, y, left);
+          for (let y = y0; y < y0 + thick; y++) put(x, y, left);
         }
       }
       if (tx === room.cols - 1) {
-        for (let x = locH + 32; x < locH + 64; x++) {
-          const y0 = locV + 16 - Math.floor((x - locH - 32) / 2);
-          for (let y = y0; y < y0 + THICKNESS; y++) put(x, y, right);
+        for (let x = locH + hw; x < locH + T; x++) {
+          const y0 = locV + hh - Math.floor((x - locH - hw) / 2);
+          for (let y = y0; y < y0 + thick; y++) put(x, y, right);
         }
       }
     }
