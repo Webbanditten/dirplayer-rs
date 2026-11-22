@@ -770,6 +770,7 @@ impl WebGL2Renderer {
 
     pub fn draw_frame(&mut self, player: &mut DirPlayer) {
         self.frame_count += 1;
+        crate::player::habbo_depth::refresh(player);
         // Increment sprite debug frame counter
         let df = SPRITE_DEBUG_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
