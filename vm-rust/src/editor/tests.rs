@@ -153,3 +153,44 @@ fn corpus_edits() {
         eprintln!("{}: edited and reopened", name);
     }
 }
+
+#[test]
+fn corpus_palettes_and_indices() {
+    for path in corpus() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !name.starts_with("hh_furni_xx_") {
+            continue;
+        }
+        let mut doc = CastDoc::open(&std::fs::read(&path).unwrap()).unwrap();
+        let members = doc.summaries();
+        let Some(m) = members.iter().find(|m| m.bitmap.as_ref().map(|b| b.depth == 8 && b.width > 2 && b.height > 2).unwrap_or(false)) else { continue };
+        let slot = m.slot;
+        let h = m.bitmap.clone().unwrap();
+        let (w, hh, mut ix) = doc.indices(slot).unwrap();
+        assert_eq!((w as i32, hh as i32), (h.width, h.height));
+        ix[(w + 1) as usize] = 255;
+        doc.put_indexed(slot, &ix, w, hh, h.reg_x, h.reg_y, 0).unwrap();
+        // A new palette: a grey ramp, white at 0 like Director's palettes; then the member on it.
+        let ramp: Vec<(u8, u8, u8)> = (0..256).map(|i| (255 - i as u8, 255 - i as u8, 255 - i as u8)).collect();
+        let pal = doc.add_palette("Test ramp", &ramp).unwrap();
+        doc.put_indexed(slot, &ix, w, hh, h.reg_x, h.reg_y, pal as i16).unwrap();
+        let saved = doc.save();
+        let mut again = CastDoc::open(&saved).unwrap();
+        crate::director::file::read_director_file_bytes(&saved, "x.cct", "http://localhost/").unwrap();
+        assert_eq!(again.indices(slot).unwrap().2, ix, "{}: indices", name);
+        let hb = again.bitmap_header(slot).unwrap();
+        assert_eq!(hb.palette_id, pal as i16, "{}: palette", name);
+        assert_eq!(again.member(pal).unwrap().name(), "Test ramp");
+        assert_eq!(again.palette_colors(pal).unwrap()[1], (254, 254, 254));
+        let (_, _, px) = again.rgba(slot).unwrap();
+        let i = (w + 1) as usize;
+        assert_eq!(&px[i * 4..i * 4 + 3], &[0, 0, 0], "{}: index 255 of the ramp is black", name);
+        // Recolouring the palette recolours the member.
+        let mut red = ramp.clone();
+        red[255] = (255, 0, 0);
+        again.set_palette_colors(pal, &red).unwrap();
+        let (_, _, px) = again.rgba(slot).unwrap();
+        assert_eq!(&px[i * 4..i * 4 + 3], &[255, 0, 0], "{}", name);
+        eprintln!("{}: slot {} clutCastLib {} -> palette {} ok", name, slot, h.clut_cast_lib, pal);
+    }
+}

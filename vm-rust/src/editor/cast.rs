@@ -26,6 +26,7 @@ use crate::director::utils::human_version;
 use crate::player::bitmap::bitmap::{decode_jpeg_bitmap, decompress_bitmap, resolve_palette_table, Bitmap, PaletteRef};
 use crate::player::bitmap::palette_map::PaletteMap;
 use crate::player::cast_member::PaletteMember;
+use crate::player::sprite::ColorRef;
 
 pub const TYPE_BITMAP: u32 = 1;
 pub const TYPE_FIELD: u32 = 3;
@@ -239,7 +240,7 @@ pub fn read_bitmap_header(spec: &[u8], dir_version: u16) -> BitmapHeader {
 }
 
 /// Rewrite size, depth, palette and registration point; everything else in the header stays.
-fn write_bitmap_header(spec: &[u8], width: i32, height: i32, reg_x: i32, reg_y: i32, depth: u8, clut_id: Option<i16>, use_alpha: bool) -> Vec<u8> {
+fn write_bitmap_header(spec: &[u8], width: i32, height: i32, reg_x: i32, reg_y: i32, depth: u8, clut_id: Option<i16>, clut_cast_lib: Option<i16>, use_alpha: bool) -> Vec<u8> {
     let mut s = bitmap_spec_min(spec);
     let top = i16::from_be_bytes([s[2], s[3]]) as i32;
     let left = i16::from_be_bytes([s[4], s[5]]) as i32;
@@ -255,7 +256,20 @@ fn write_bitmap_header(spec: &[u8], width: i32, height: i32, reg_x: i32, reg_y: 
     if let Some(id) = clut_id {
         put_be16(&mut s, 26, id as u16);
     }
+    if let Some(lib) = clut_cast_lib {
+        put_be16(&mut s, 24, lib as u16);
+    }
     s
+}
+
+/// A `CLUT` payload: 256 entries of (r, r, g, g, b, b); missing entries are black.
+fn clut_bytes(colors: &[(u8, u8, u8)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256 * 6);
+    for i in 0..256 {
+        let (r, g, b) = colors.get(i).copied().unwrap_or((0, 0, 0));
+        out.extend_from_slice(&[r, r, g, g, b, b]);
+    }
+    out
 }
 
 /// Only the registration point.
@@ -576,6 +590,81 @@ impl CastDoc {
         Ok((w, h, out))
     }
 
+    /// Palette indices of an indexed (8-bit or less) member, one byte per pixel.
+    pub fn indices(&self, slot: u32) -> Result<(u32, u32, Vec<u8>), String> {
+        let b = self.bitmap(slot)?;
+        let b = b.borrow();
+        if b.bit_depth > 8 {
+            return Err(format!("Slot {} is {}-bit, not indexed", slot, b.bit_depth));
+        }
+        let (w, h) = (b.width as u32, b.height as u32);
+        let mut out = vec![0u8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if let ColorRef::PaletteIndex(i) = b.get_pixel_color_ref(x as u16, y as u16) {
+                    out[(y * w + x) as usize] = i;
+                }
+            }
+        }
+        Ok((w, h, out))
+    }
+
+    /// Store palette indices as the member's 8-bit pixels. `palette_id` as in [`BitmapHeader`] (a palette member's
+    /// slot, or a built-in below 0); 0 keeps the member's palette. Switching to a member palette from a built-in also
+    /// sets clutCastLib the way the cast's other bitmaps have it (else -1: the bitmap's own cast).
+    pub fn put_indexed(&mut self, slot: u32, indices: &[u8], width: u32, height: u32, reg_x: i32, reg_y: i32, palette_id: i16) -> Result<(), String> {
+        let header = self.bitmap_header(slot)?;
+        let pal = if palette_id == 0 { header.palette_id } else { palette_id };
+        if pal > 0 && self.member(pal as u32).map(|m| m.kind != TYPE_PALETTE).unwrap_or(true) {
+            return Err(format!("Slot {} is not a palette", pal));
+        }
+        let mut enc = super::bitmap::encode_indices(indices, width, height, stored_clut_id(pal))?;
+        if pal > 0 && header.palette_id <= 0 {
+            let lib = self
+                .summaries()
+                .iter()
+                .filter_map(|m| m.bitmap.as_ref())
+                .find(|b| b.palette_id > 0)
+                .map(|b| b.clut_cast_lib)
+                .unwrap_or(-1);
+            enc.clut_cast_lib = Some(lib);
+        }
+        self.put_bitmap(slot, &enc, reg_x, reg_y)
+    }
+
+    /// Change a palette member's colours (every bitmap on it changes with it).
+    pub fn set_palette_colors(&mut self, slot: u32, colors: &[(u8, u8, u8)]) -> Result<(), String> {
+        let rec = self.member(slot)?;
+        if rec.kind != TYPE_PALETTE {
+            return Err(format!("Slot {} is not a palette", slot));
+        }
+        let id = self.cast_id(slot).unwrap();
+        let data = clut_bytes(colors);
+        match self.media(id, b"CLUT") {
+            Some(sec) => self.file.set(sec, *b"CLUT", data),
+            None => {
+                let sec = self.file.next_id();
+                self.file.set(sec, *b"CLUT", data);
+                self.keys.push(KeyEntry { section: sec, cast: id, tag: *b"CLUT" });
+                self.dirty_index = true;
+            }
+        }
+        self.bitmaps.borrow_mut().clear();
+        Ok(())
+    }
+
+    /// A new palette member (Director's layout: a named CASt of type 4 without specific data, and its CLUT).
+    pub fn add_palette(&mut self, name: &str, colors: &[(u8, u8, u8)]) -> Result<u32, String> {
+        let rec = CastMemberRec { kind: TYPE_PALETTE, info: Some(MemberInfo::new_named(name)), specific: vec![] };
+        let id = self.file.next_id();
+        self.file.set(id, *b"CASt", rec.write());
+        let slot = self.free_slot();
+        self.slots[slot as usize - 1] = id;
+        self.dirty_index = true;
+        self.set_palette_colors(slot, colors)?;
+        Ok(slot)
+    }
+
     pub fn set_reg_point(&mut self, slot: u32, reg_x: i32, reg_y: i32) -> Result<(), String> {
         let mut rec = self.member(slot)?;
         if rec.kind != TYPE_BITMAP {
@@ -594,7 +683,7 @@ impl CastDoc {
             return Err("Not a bitmap".into());
         }
         let id = self.cast_id(slot).unwrap();
-        rec.specific = write_bitmap_header(&rec.specific, enc.width as i32, enc.height as i32, reg_x, reg_y, enc.depth, enc.clut_id, enc.use_alpha);
+        rec.specific = write_bitmap_header(&rec.specific, enc.width as i32, enc.height as i32, reg_x, reg_y, enc.depth, enc.clut_id, enc.clut_cast_lib, enc.use_alpha);
         self.put_member(slot, &rec)?;
         // The new pixels replace any JPEG and alpha plane the member had.
         let stale: Vec<u32> = self

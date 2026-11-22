@@ -53,6 +53,8 @@ pub struct Encoded {
     pub bitd: Vec<u8>,
     /// Stored clutId to write, when the depth uses a palette.
     pub clut_id: Option<i16>,
+    /// clutCastLib to write, when it changes.
+    pub clut_cast_lib: Option<i16>,
     pub use_alpha: bool,
     pub report: ImportReport,
 }
@@ -125,7 +127,7 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, mode: ImportMode, palette: O
         let bitd = pack_rows(&raw, pitch);
         report.depth = 8;
         report.bytes = bitd.len();
-        return Ok(Encoded { width, height, depth: 8, bitd, clut_id: Some(clut), use_alpha: false, report });
+        return Ok(Encoded { width, height, depth: 8, bitd, clut_id: Some(clut), clut_cast_lib: None, use_alpha: false, report });
     }
 
     let pitch = w * 4;
@@ -155,5 +157,21 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, mode: ImportMode, palette: O
     let bitd = pack_rows(&raw, pitch);
     report.depth = 32;
     report.bytes = bitd.len();
-    Ok(Encoded { width, height, depth: 32, bitd, clut_id: None, use_alpha, report })
+    Ok(Encoded { width, height, depth: 32, bitd, clut_id: None, clut_cast_lib: None, use_alpha, report })
+}
+
+/// Palette indices (width x height, one byte each) as an 8-bit BITD on the stored clutId `clut`.
+pub fn encode_indices(indices: &[u8], width: u32, height: u32, clut: i16) -> Result<Encoded, String> {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || indices.len() != w * h {
+        return Err(format!("Expected {}x{} indices, got {}", width, height, indices.len()));
+    }
+    let pitch = w + (w & 1);
+    let mut raw = vec![0u8; pitch * h];
+    for y in 0..h {
+        raw[y * pitch..y * pitch + w].copy_from_slice(&indices[y * w..(y + 1) * w]);
+    }
+    let bitd = pack_rows(&raw, pitch);
+    let report = ImportReport { depth: 8, bytes: bitd.len(), ..Default::default() };
+    Ok(Encoded { width, height, depth: 8, bitd, clut_id: Some(clut), clut_cast_lib: None, use_alpha: false, report })
 }

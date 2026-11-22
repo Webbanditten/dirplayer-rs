@@ -90,6 +90,39 @@ impl CastDocument {
         Ok(serde_json::to_string(&enc.report).unwrap())
     }
 
+    /// Palette indices of an indexed (8-bit or less) bitmap, one byte per pixel.
+    #[wasm_bindgen(js_name = bitmapIndices)]
+    pub fn bitmap_indices(&self, slot: u32) -> Result<Vec<u8>, JsValue> {
+        self.doc.indices(slot).map(|(_, _, d)| d).map_err(err)
+    }
+
+    /// Store palette indices as the member's 8-bit pixels. `paletteId`: a palette member's slot, a built-in palette
+    /// (< 0: -1 systemMac, -3 grayscale, -102 systemWin...), or 0 for the member's own.
+    #[wasm_bindgen(js_name = setBitmapIndexed)]
+    pub fn set_bitmap_indexed(&mut self, slot: u32, indices: &[u8], width: u32, height: u32, reg_x: i32, reg_y: i32, palette_id: i16) -> Result<(), JsValue> {
+        self.doc.put_indexed(slot, indices, width, height, reg_x, reg_y, palette_id).map_err(err)
+    }
+
+    /// Change a palette member's colours (r, g, b bytes, up to 256 entries).
+    #[wasm_bindgen(js_name = setPaletteColors)]
+    pub fn set_palette_colors(&mut self, slot: u32, rgb: &[u8]) -> Result<(), JsValue> {
+        let colors: Vec<(u8, u8, u8)> = rgb.chunks(3).filter(|c| c.len() == 3).map(|c| (c[0], c[1], c[2])).collect();
+        self.doc.set_palette_colors(slot, &colors).map_err(err)
+    }
+
+    /// A new palette member; returns its slot.
+    #[wasm_bindgen(js_name = addPalette)]
+    pub fn add_palette(&mut self, name: &str, rgb: &[u8]) -> Result<u32, JsValue> {
+        let colors: Vec<(u8, u8, u8)> = rgb.chunks(3).filter(|c| c.len() == 3).map(|c| (c[0], c[1], c[2])).collect();
+        self.doc.add_palette(name, &colors).map_err(err)
+    }
+
+    /// A built-in palette's 256 colours as r, g, b bytes (ids as `paletteId`: -1 systemMac, -3 grayscale, ...).
+    #[wasm_bindgen(js_name = builtinPalette)]
+    pub fn builtin_palette(id: i16) -> Vec<u8> {
+        super::cast::builtin_palette_colors(id).unwrap_or_default().into_iter().flat_map(|(r, g, b)| [r, g, b]).collect()
+    }
+
     /// Copy a member into a new slot under a new name; returns the new slot.
     pub fn duplicate(&mut self, slot: u32, name: &str) -> Result<u32, JsValue> {
         self.doc.duplicate(slot, name).map_err(err)
