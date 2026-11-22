@@ -11,6 +11,12 @@ npx vite -c habbo/furni-editor/vite.config.js        # http://127.0.0.1:8097/
 npx vite build -c habbo/furni-editor/vite.config.js  # static build in habbo/furni-editor/dist
 ```
 
+Published at **https://webbanditten.github.io/dirplayer-rs/furni-editor/** (GitHub Pages of the fork, branch
+`gh-pages`): `habbo/furni-editor/deploy-pages.sh` builds the release VM and the editor and force-pushes them there as one
+commit (`SKIP_VM=1` when `vm-rust/pkg` is already a release build). Only the editor's files are published; casts load
+from the asset host at runtime (it sends CORS headers). The hotel's colour variants come through the dev server's
+`/hotel-api` proxy, so on Pages the preview has no hotel colours (type them, or they come from an imported Flash file).
+
 ## What it does
 
 - **Open** a cast from disk (or drop it on the window), or load one by class name from the hotel's asset host
