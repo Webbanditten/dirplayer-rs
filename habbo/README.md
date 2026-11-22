@@ -85,12 +85,14 @@ change is listed here so a rebase onto upstream can keep or drop it on purpose.
   neighbours on the same diagonal interleave their layers (Biblioteket: a chair's arm over a 2-tile shelf in front
   of it, a gate over a chair's seat but under its arm). Before drawing, the furni (`pActiveObjList`) and avatars/pets (`pUserObjList`) of "Room Component
   Class" are sorted: objects that both stand on the room floor (height map) on separate tiles by footprint (behind
-  first; side by side, the right one in front); everything else keeps the client's order: shared tiles (sitting),
+  first; side by side, where the footprints only meet at a corner, the whole object whose frontmost layer the client
+  draws last, so parts that reach past their tile such as a bear sofa's head stay in front; mirrored furni by the box
+  they are drawn in); everything else keeps the client's order: shared tiles (sitting), huge mostly empty sprites,
   stacked furni (builders hide helper furni in stacks against the client's order), light and shadow effects
   (additive and subtractive inks, nearly transparent layers), each object's own layers, floor layers (shadows,
   carpets). Constraint cycles fall back to the client's order inside the cycle only (strongly connected components).
   Checked on Biblioteket and five busy guest rooms (Ss'S Gold Lounge, Casino Tripple 6ix Dices, Onsen, Gården's
-  Skovtur, The Vault): stacked builds draw as before. The sprites take their own depth
+  Skovtur, The Vault), then the 6 small and 6 big guest rooms with the most furni and 7 mazes: stacked builds draw as before. The sprites take their own depth
   values in that order, so walls, wall items and the interface keep their places, and Lingo still reads its own
   `locZ`; drawing and clicking use the new order. `?depth=0` in the harness draws by `locZ` alone. Furni casts are
   never changed for this.

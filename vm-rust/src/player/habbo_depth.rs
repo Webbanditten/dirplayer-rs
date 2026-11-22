@@ -9,7 +9,9 @@
 //! This pass re-orders the sprites of the room's furni (`pActiveObjList` of "Room Component Class") and avatars/pets
 //! (`pUserObjList`) when drawing, from the objects' floor footprints:
 //! - sprites of objects on separate tiles that both stand on the room floor: the object behind (by footprint) first;
-//!   side by side on the same diagonal, the one further right in front;
+//!   side by side (touching at most at a corner, so the footprints can't tell) the whole object whose frontmost layer
+//!   the client draws last in front: parts that reach beyond their tile (a bear sofa's head) stay where Sulake put
+//!   them, without the two objects' layers interleaving;
 //! - sprites of objects that share a tile: as the client ordered them (`locZ`), so sitting and lying stay as they are,
 //!   and so do stacks (builders hide helper furni inside them);
 //! - stacked furni (not standing on the room floor), objects at different heights, and light and shadow effects
@@ -30,6 +32,7 @@ use crate::director::lingo::datum::Datum;
 use crate::player::allocator::{DatumAllocatorTrait, ScriptInstanceAllocatorTrait};
 use crate::player::geometry::IntRect;
 use crate::player::score::get_concrete_sprite_rect;
+use crate::player::sprite::Sprite;
 use crate::player::script::ScriptInstance;
 use crate::player::script_ref::ScriptInstanceRef;
 use crate::player::symbols::symbol::Symbol;
@@ -49,6 +52,8 @@ const SAME_LEVEL: f64 = 0.05;
 /// transparent layers.
 const EFFECT_INKS: [i32; 4] = [33, 34, 35, 38];
 const EFFECT_BLEND_BELOW: i32 = 40;
+/// Sprites wider or taller than this (pixels) are treated like effects.
+const HUGE_SPRITE: i32 = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -87,31 +92,28 @@ impl Obj {
     }
 }
 
-/// Which of two objects on separate tiles is drawn first (Less = `a` first).
-pub fn footprint_order(a: &Obj, b: &Obj) -> Ordering {
+/// Which of two objects on separate tiles is drawn first (Less = `a` first), or None when their footprints can't tell
+/// (side by side, one left-front and the other right-back).
+pub fn footprint_order(a: &Obj, b: &Obj) -> Option<Ordering> {
     let x_overlap = a.x0 <= b.x1 && b.x0 <= a.x1;
     let y_overlap = a.y0 <= b.y1 && b.y0 <= a.y1;
     // Behind along x or y, where they face each other.
     if (a.x1 < b.x0 && y_overlap) || (a.y1 < b.y0 && x_overlap) {
-        return Ordering::Less;
+        return Some(Ordering::Less);
     }
     if (b.x1 < a.x0 && y_overlap) || (b.y1 < a.y0 && x_overlap) {
-        return Ordering::Greater;
+        return Some(Ordering::Greater);
     }
     // Diagonal neighbours: behind on both axes.
     if a.x1 < b.x0 && a.y1 < b.y0 {
-        return Ordering::Less;
+        return Some(Ordering::Less);
     }
     if b.x1 < a.x0 && b.y1 < a.y0 {
-        return Ordering::Greater;
+        return Some(Ordering::Greater);
     }
-    // Side by side (one left-front, the other right-back): by their centres' diagonal, then the right one in front.
-    let sa = a.x0 + a.x1 + a.y0 + a.y1;
-    let sb = b.x0 + b.x1 + b.y0 + b.y1;
-    if sa != sb {
-        return sa.cmp(&sb);
-    }
-    (a.x0 + a.x1 - a.y0 - a.y1).cmp(&(b.x0 + b.x1 - b.y0 - b.y1))
+    // Side by side: they meet at most at a corner, and which one covers the other depends on how their art reaches
+    // past their tiles.
+    None
 }
 
 fn overlaps(a: &IntRect, b: &IntRect) -> bool {
@@ -145,6 +147,14 @@ pub fn order(objs: &[Obj], sprs: &[Spr]) -> Vec<(usize, i64)> {
             add(w[0], w[1], &mut succ, &mut indeg);
         }
     }
+    // Each object's frontmost layer as the client draws it (effects left out), for objects side by side.
+    let mut front: Vec<Option<(i32, usize)>> = vec![None; objs.len()];
+    for &i in &rest {
+        let s = &sprs[i];
+        if !s.effect && front[s.obj].map_or(true, |f| (s.z, s.channel) > f) {
+            front[s.obj] = Some((s.z, s.channel));
+        }
+    }
 
     // Sweep by left edge so only horizontally overlapping sprites are compared.
     let mut by_left = rest.clone();
@@ -164,7 +174,11 @@ pub fn order(objs: &[Obj], sprs: &[Spr]) -> Vec<(usize, i64)> {
                 // small rooms the client leaves height out, and builders hide helper furni inside their stacks).
                 by_z(i, j)
             } else if oa.on_floor && ob.on_floor && (oa.h - ob.h).abs() < SAME_LEVEL && !a.effect && !b.effect {
-                footprint_order(oa, ob)
+                match (footprint_order(oa, ob), front[a.obj], front[b.obj]) {
+                    (Some(o), _, _) => o,
+                    (None, Some(fa), Some(fb)) => fa.cmp(&fb),
+                    _ => by_z(i, j),
+                }
             } else {
                 // Stacked furni, different heights and light/shadow effects: the client's depth decides, so stacked
                 // builds look as they were built (builders hide helper furni in them against the client's order).
@@ -382,6 +396,36 @@ fn instances<'a>(player: &'a DirPlayer, d: Option<&'a Datum>) -> Vec<&'a ScriptI
         .collect()
 }
 
+/// The box a sprite is drawn in. Habbo mirrors furni (directions 4 and 6) with rotation 180 and skew 180;
+/// `get_concrete_sprite_rect` is the box before that, so the drawn one is that box turned around the loc (as
+/// `score::get_sprite_bounds_in_context` does for Lingo's `sprite.rect`).
+fn drawn_rect(player: &DirPlayer, sprite: &Sprite) -> IntRect {
+    let rect = get_concrete_sprite_rect(player, sprite);
+    let has_rotation = sprite.rotation.abs() > 0.1;
+    let has_skew_flip = sprite.has_skew_flip();
+    if !has_rotation && !has_skew_flip {
+        return rect;
+    }
+    let (cx, cy) = (sprite.loc_h as f64, sprite.loc_v as f64);
+    let (sin_t, cos_t) = (sprite.rotation * std::f64::consts::PI / 180.0).sin_cos();
+    let (mut l, mut t, mut r, mut b) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (x, y) in [
+        (rect.left as f64, rect.top as f64),
+        (rect.right as f64, rect.top as f64),
+        (rect.left as f64, rect.bottom as f64),
+        (rect.right as f64, rect.bottom as f64),
+    ] {
+        let dx = x - cx;
+        let dy = if has_skew_flip { cy - y } else { y - cy };
+        let (px, py) = (cx + dx * cos_t - dy * sin_t, cy + dx * sin_t + dy * cos_t);
+        l = l.min(px);
+        t = t.min(py);
+        r = r.max(px);
+        b = b.max(py);
+    }
+    IntRect { left: l.round() as i32, top: t.round() as i32, right: r.round() as i32, bottom: b.round() as i32 }
+}
+
 fn sprite_ref(d: Option<&Datum>) -> Option<usize> {
     match d? {
         Datum::SpriteRef(n) if *n > 0 => Some(*n as usize),
@@ -414,12 +458,15 @@ fn collect(player: &DirPlayer) -> Option<(Vec<Obj>, Vec<Spr>)> {
         if !sprite.visible || sprite.member.is_none() {
             return;
         }
-        let rect = get_concrete_sprite_rect(player, sprite);
+        let rect = drawn_rect(player, sprite);
         if rect.right <= rect.left || rect.bottom <= rect.top {
             return;
         }
         let floor = base.is_some_and(|b| (sprite.loc_z as f64 - b) < FLOOR_OFFSET as f64);
-        let effect = base.is_some() && (EFFECT_INKS.contains(&sprite.ink) || sprite.blend < EFFECT_BLEND_BELOW);
+        // Huge sprites (a furni drawn over the whole room, mostly transparent) would be tied to every other sprite:
+        // they keep the client's order too.
+        let huge = rect.right - rect.left > HUGE_SPRITE || rect.bottom - rect.top > HUGE_SPRITE;
+        let effect = base.is_some() && (EFFECT_INKS.contains(&sprite.ink) || sprite.blend < EFFECT_BLEND_BELOW || huge);
         sprs.push(Spr { channel, obj, z: sprite.loc_z, rect, floor, effect });
     };
 
@@ -567,11 +614,32 @@ mod tests {
     #[test]
     fn side_by_side_on_a_diagonal_do_not_interleave() {
         // divider_silo3 (gate) at (22,22) and sofachair_silo at (21,23): the chair's arm (+29) went over the gate's
-        // posts, the gate over the chair's seat (-35). Now one whole object over the other (the right one in front).
+        // posts, the gate over the chair's seat (-35). Now one whole object over the other: the gate, whose front layer
+        // (+32) the client draws after the chair's (+29).
         let objs = [furni(21, 23, 1, 1), furni(22, 22, 1, 1)];
         let sprs = [spr(1, 0, z(21, 23, 29)), spr(2, 0, z(21, 23, -35)), spr(3, 1, z(22, 22, -1)), spr(4, 1, z(22, 22, 32))];
         let o = drawn(&objs, &sprs);
         assert!(before(&o, 1, 3) && before(&o, 2, 3) && before(&o, 1, 4), "{o:?}");
+    }
+
+    #[test]
+    fn side_by_side_the_frontmost_layer_decides() {
+        // Gold Lounge: a bear sofa (rclr_sofa, 12,3, along y) beside an Antik sofa (hcsohva, 13,2, along x) meet at a
+        // corner. Their layers have the same depths; the client draws the bear sofa's later channels in front, its
+        // head over the Antik sofa's arm. That stays, with all of the bear sofa in front.
+        let objs = [Obj { kind: Kind::Furni, x0: 12, x1: 12, y0: 3, y1: 4, h: 0.0, on_floor: true }, furni(13, 2, 2, 1)];
+        let zs = [-7, 25, 995, 1027];
+        let mut sprs = Vec::new();
+        for (k, dz) in zs.iter().enumerate() {
+            sprs.push(spr(707 + k, 0, z(12, 3, *dz)));
+            sprs.push(spr(40 + k, 1, z(13, 2, *dz)));
+        }
+        let o = drawn(&objs, &sprs);
+        for k in 0..4 {
+            for m in 0..4 {
+                assert!(before(&o, 40 + m, 707 + k), "{o:?}");
+            }
+        }
     }
 
     #[test]
