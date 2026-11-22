@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 use super::bitmap::{encode, ImportMode};
 use super::cast::{stored_clut_id, CastDoc, TYPE_BITMAP, TYPE_FIELD, TYPE_TEXT};
 use super::render::{render, RenderSpec};
+use super::swf::SwfFile;
 
 fn err(e: String) -> JsValue {
     JsValue::from_str(&e)
@@ -156,5 +157,44 @@ impl CastDocument {
     pub fn render(&self, spec_json: &str, background: &[u8]) -> Result<Vec<u8>, JsValue> {
         let spec: RenderSpec = serde_json::from_str(spec_json).map_err(|e| err(e.to_string()))?;
         render(&self.doc, &spec, if background.is_empty() { None } else { Some(background) }).map_err(err)
+    }
+}
+
+/// A Flash file's assets: `new SwfDocument(bytes)`, then `summaryJson()`, `binaryText(id)`, `imageRgba(id)`.
+#[wasm_bindgen]
+pub struct SwfDocument {
+    swf: SwfFile,
+}
+
+#[wasm_bindgen]
+impl SwfDocument {
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8]) -> Result<SwfDocument, JsValue> {
+        SwfFile::read(bytes).map(|swf| SwfDocument { swf }).map_err(err)
+    }
+
+    /// `{version, binary: [{id, size, names}], images: [{id, width, height, names}], skipped: [{tag, id, reason}]}`
+    #[wasm_bindgen(js_name = summaryJson)]
+    pub fn summary_json(&self) -> String {
+        let s = &self.swf;
+        serde_json::json!({
+            "version": s.version,
+            "binary": s.binary.iter().map(|(id, d)| serde_json::json!({ "id": id, "size": d.len(), "names": s.names_of(*id) })).collect::<Vec<_>>(),
+            "images": s.images.iter().map(|i| serde_json::json!({ "id": i.id, "width": i.width, "height": i.height, "names": s.names_of(i.id) })).collect::<Vec<_>>(),
+            "skipped": s.skipped.iter().map(|(t, id, r)| serde_json::json!({ "tag": t, "id": id, "reason": r })).collect::<Vec<_>>(),
+        })
+        .to_string()
+    }
+
+    /// A DefineBinaryData payload as text (UTF-8).
+    #[wasm_bindgen(js_name = binaryText)]
+    pub fn binary_text(&self, id: u16) -> Option<String> {
+        self.swf.binary.iter().find(|(i, _)| *i == id).map(|(_, d)| String::from_utf8_lossy(d).into_owned())
+    }
+
+    /// A bitmap's straight RGBA pixels.
+    #[wasm_bindgen(js_name = imageRgba)]
+    pub fn image_rgba(&self, id: u16) -> Vec<u8> {
+        self.swf.images.iter().find(|i| i.id == id).map(|i| i.rgba.clone()).unwrap_or_default()
     }
 }
