@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { useEffect, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { parseLingo, LingoError } from '../lingo';
@@ -35,7 +36,7 @@ function BitmapEditor({ doc, member, rev, edit }: { doc: CastDocument; member: M
     const c = canvas.current;
     if (!c) return;
     const img = document.createElement('canvas');
-    paintMember(img, doc, member.slot, h, zoom);
+    paintMember(img, doc, member.slot, h, zoom, false, true);
     c.width = img.width + pad * 2;
     c.height = img.height + pad * 2;
     const ctx = c.getContext('2d')!;
@@ -145,7 +146,7 @@ export function Inspector(props: Props) {
   return (
     <div className="inspector">
       <div className="inspector-head">
-        <div className="muted">#{member.slot} {member.type}</div>
+        <div className="meta"><span className="type-badge">{member.type}</span><span className="muted small">member #{member.slot}</span></div>
         <div className="row">
           <input className="name" value={name} onChange={(e) => setName(e.target.value)} />
           <button disabled={name === member.name || !name} onClick={() => edit(`Renamed to ${name}`, () => doc.setName(slot, name))}>Rename</button>
@@ -156,8 +157,8 @@ export function Inspector(props: Props) {
         <>
           <BitmapEditor doc={doc} member={member} rev={rev} edit={edit} />
           <div className="row">
-            <button className="primary" onClick={() => props.onPaint(slot)} title="Draw on the pixels, in the member's own palette (also: double-click it in the grid)">Paint…</button>
-            <button onClick={() => props.onImport(slot)}>Replace with image…</button>
+            <button className="primary" onClick={() => props.onPaint(slot)} title="Draw on the pixels, in the member's own palette (also: double-click it in the grid)"><Icon name="brush" size={14} />Paint…</button>
+            <button onClick={() => props.onImport(slot)}><Icon name="image" size={14} />Replace…</button>
             <select value={props.importMode} onChange={(e) => props.setImportMode(e.target.value as ImportMode)} title="How imported pixels are stored">
               <option value="auto">auto (8-bit if every colour is in the palette)</option>
               <option value="indexed">8-bit, nearest palette colours</option>
@@ -165,9 +166,10 @@ export function Inspector(props: Props) {
             </select>
           </div>
           <div className="row">
-            <button onClick={() => props.onExport(slot)}>Export PNG</button>
-            <button onClick={() => props.onDuplicate(slot)}>Duplicate…</button>
-            <button className="danger" onClick={() => props.onDelete(slot)}>Delete</button>
+            <button onClick={() => props.onExport(slot)}><Icon name="export" size={14} />PNG</button>
+            <button onClick={() => props.onDuplicate(slot)}><Icon name="copy" size={14} />Duplicate…</button>
+            <span className="spacer" />
+            <button className="danger ghost" onClick={() => props.onDelete(slot)}><Icon name="trash" size={14} />Delete</button>
           </div>
         </>
       )}

@@ -8,6 +8,7 @@ import { Inspector, type ImportMode } from './components/Inspector';
 import { Preview } from './components/Preview';
 import { Paint } from './components/Paint';
 import { LightPanel } from './components/LightPanel';
+import { Icon, Logo } from './components/Icon';
 
 const DEFAULT_HOST = 'https://images.habbo-danmark.com/hof_furni/';
 const IMAGE_TYPES = 'image/png,image/gif,image/jpeg';
@@ -75,6 +76,15 @@ export function App() {
   const [templateClass] = useState(() => stored('furniEditor.template', 'chair_norja'));
   const [flashSmall, setFlashSmall] = useState(() => stored('furniEditor.flashSmall', '0') === '1');
   const [flashColors, setFlashColors] = useState<{ label: string; colour: string }[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [theme, setTheme] = useState(() => stored('furniEditor.theme', 'auto'));
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
+    else delete root.dataset.theme;
+    store('furniEditor.theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     loadWasm().then(() => setReady(true), (e) => setStatus(`Couldn't load DirPlayer: ${e}`));
@@ -526,47 +536,142 @@ export function App() {
     }
   };
 
+  const hostName = (() => {
+    try {
+      return new URL(host).host;
+    } catch {
+      return host;
+    }
+  })();
+  const flashImport = async () => {
+    const f = await pickFile('.swf');
+    if (f) importFlash(f);
+  };
+  const hotelField = (
+    <div className="field-group" title="Load a furni's casts (large and small) from the hotel's asset host">
+      <Icon name="search" className="field-icon" />
+      <input className="cls" value={className} onChange={(e) => setClassName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && openFromHotel()} placeholder="chair_norja" spellCheck={false} />
+      <button onClick={openFromHotel} disabled={!ready}>Load</button>
+    </div>
+  );
+  const sizeSwitch = (
+    <span className="segmented" title="The furni's large (64 px) and small (32 px) cast (Alt+S)">
+      <button className={!smallShown ? 'on' : ''} onClick={() => switchSize(false)}>
+        <span className={`dot${(!smallShown ? dirty : other?.dirty) ? ' dirty' : ''}`} />64 px
+      </button>
+      <button className={smallShown ? 'on' : ''} onClick={() => switchSize(true)} title={!smallShown && !other ? 'Make a small version from the large pictures' : undefined}>
+        {!smallShown && !other ? <Icon name="plus" size={12} /> : <span className={`dot${(smallShown ? dirty : other?.dirty) ? ' dirty' : ''}`} />}32 px
+      </button>
+    </span>
+  );
+
   return (
-    <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
-      <header className="toolbar">
-        <b className="title">Furni editor</b>
-        <button onClick={openFile} disabled={!ready}>Open .cct…</button>
-        <span className="sep" />
-        <input className="host" value={host} onChange={(e) => setHost(e.target.value)} title="Where hof_furni casts are loaded from" />
-        <input className="cls" value={className} onChange={(e) => setClassName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && openFromHotel()} placeholder="class, e.g. chair_norja" />
-        <button onClick={openFromHotel} disabled={!ready}>Load from hotel</button>
-        <span className="sep" />
-        <button onClick={async () => { const f = await pickFile('.swf'); if (f) importFlash(f); }} disabled={!ready} title="Convert a Flash furni (.swf) into a Shockwave cast; you can also drop the .swf on the window">
-          Import Flash furni…
-        </button>
-        <label title="Also convert the 32 px pictures (s_ members)"><input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} /> 32 px</label>
-        <span className="sep" />
-        <span className="sep" />
-        <span className="segmented" title="The large (64 px) and the small (32 px) cast of the furni (Alt+S switches)">
-          <button className={doc && !smallShown ? 'on' : ''} onClick={() => switchSize(false)} disabled={!doc}>64 px</button>
-          <button className={doc && smallShown ? 'on' : ''} onClick={() => switchSize(true)} disabled={!doc}>
-            32 px{doc && !smallShown && !other ? ' +' : ''}
+    <div
+      className="app"
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.relatedTarget || !(e.currentTarget as Node).contains(e.relatedTarget as Node)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        setDragging(false);
+        onDrop(e);
+      }}
+    >
+      <header className="topbar">
+        <div className="brand">
+          <Logo size={26} />
+          <span className="brand-name">Furni <em>editor</em></span>
+        </div>
+        <span className="tb-div" />
+        <div className="tb-group">
+          <button onClick={openFile} disabled={!ready} title="Open a .cct, or a furni's large and small cast together (you can also drop them on the window)">
+            <Icon name="folder" />Open
           </button>
-        </span>
-        <span className="sep" />
-        <button className="primary" onClick={save} disabled={!doc}>{other?.dirty && dirty ? 'Save both .cct' : 'Save .cct'}</button>
-        <button onClick={cloneAs} disabled={!doc} title="Rename every member of the class, for a new furni based on this one">New furni from this…</button>
-        {EMBED && (
-          <button className="primary" onClick={publish} disabled={!doc} title="Housekeeping checks the casts and asks before publishing">
-            Publish to hotel…
+          {hotelField}
+          <button onClick={flashImport} disabled={!ready} title="Convert a Flash furni (.swf) into a Shockwave cast; you can also drop the .swf on the window">
+            <Icon name="bolt" />Flash
           </button>
+          <label className="chip" title="Also convert the Flash file's 32 px pictures (into the small cast)">
+            <input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} />32 px
+          </label>
+        </div>
+        <span className="spacer" />
+        {doc && furni && (
+          <div className="tb-group">
+            <span className="doc-pill" title={[fileName, other?.name].filter(Boolean).join(' + ')}>
+              <span className={`dot${dirty ? ' dirty' : ''}`} />
+              <span className="name">{fileName}</span>
+            </span>
+            {sizeSwitch}
+          </div>
         )}
         <span className="spacer" />
-        <span className="muted">
-          {fileName}{dirty ? ' (changed)' : ''}
-          {other ? ` · ${other.name}${other.dirty ? ' (changed)' : ''}` : ''}
-        </span>
+        <div className="tb-group">
+          <button className="ghost" onClick={cloneAs} disabled={!doc} title="Rename every member of the class (both sizes), for a new furni based on this one">
+            <Icon name="copy" />New from this…
+          </button>
+          <button className="primary" onClick={save} disabled={!doc} title="Save the cast (and the other size when it has changes)">
+            <Icon name="save" />{other?.dirty && dirty ? 'Save both' : 'Save'}
+          </button>
+          {EMBED && (
+            <button className="primary" onClick={publish} disabled={!doc} title="Housekeeping checks the casts and asks before publishing">
+              <Icon name="upload" />Publish…
+            </button>
+          )}
+          <button className={`icon ghost${settingsOpen ? ' on' : ''}`} onClick={() => setSettingsOpen(!settingsOpen)} title="Settings">
+            <Icon name="sliders" />
+          </button>
+        </div>
+        {settingsOpen && (
+          <div className="popover" onMouseLeave={() => setSettingsOpen(false)}>
+            <h4>Asset host</h4>
+            <input value={host} onChange={(e) => setHost(e.target.value)} onBlur={() => store('furniEditor.host', host)} spellCheck={false} title="Where hof_furni casts are loaded from" />
+            <span className="muted small">Casts are loaded from here by class name; Flash imports use its chair_norja as their template.</span>
+            <h4>Theme</h4>
+            <span className="segmented">
+              {(['auto', 'light', 'dark'] as const).map((t) => (
+                <button key={t} className={theme === t ? 'on' : ''} onClick={() => setTheme(t)}>
+                  {t === 'light' ? <Icon name="sun" size={13} /> : t === 'dark' ? <Icon name="moon" size={13} /> : null}
+                  {t === 'auto' ? 'System' : t === 'light' ? 'Light' : 'Dark'}
+                </button>
+              ))}
+            </span>
+          </div>
+        )}
       </header>
+
       {!doc || !furni ? (
         <main className="welcome">
-          <h2>Edit Habbo furni casts</h2>
-          <p>Open a <code>hh_furni_xx_&lt;class&gt;.cct</code> from disk or load one from the hotel's asset host, or import a Flash furni (<code>.swf</code>) to make a new cast from it. Change layers, directions, frames, registration points and the <code>.props</code>/<code>.data</code> texts, watch it in the room, then save the cast.</p>
-          {!ready && <p className="muted">Loading DirPlayer…</p>}
+          <div className="hero">
+            <Logo size={84} />
+            <h1>Furni <em>editor</em></h1>
+            <p>Edit Habbo furni casts in the browser: layers, directions and frames, a room to watch them in, pixel painting in the furni's own palettes, lights, and the 64 and 32 px casts side by side.</p>
+          </div>
+          <div className="start-cards">
+            <button className="start-card" onClick={openFile} disabled={!ready}>
+              <span className="tile-icon"><Icon name="folder" size={20} /></span>
+              <b>Open a cast</b>
+              <span><code>hh_furni_xx_&lt;class&gt;.cct</code> from disk, or the large and small cast together. Dropping them on the window works too.</span>
+            </button>
+            <div className="start-card">
+              <span className="tile-icon"><Icon name="download" size={20} /></span>
+              <b>Load from the hotel</b>
+              <span>By class name, both sizes, from {hostName}.</span>
+              {hotelField}
+            </div>
+            <button className="start-card" onClick={flashImport} disabled={!ready}>
+              <span className="tile-icon"><Icon name="bolt" size={20} /></span>
+              <b>Import a Flash furni</b>
+              <span>A <code>.swf</code> becomes a Shockwave cast: pictures, directions, animations, colours.</span>
+            </button>
+          </div>
+          <div className="features">
+            {['Layers × directions × frames', 'Room preview with inks', 'Paint & palettes', 'Lights and glows', '64 / 32 px pair', 'Flash import'].map((f) => <span key={f}>{f}</span>)}
+          </div>
+          {!ready && <p className="loading"><span className="spinner" />Loading DirPlayer…</p>}
         </main>
       ) : painting !== null && furni.bySlot.get(painting)?.bitmap ? (
         <main className="panes painting">
@@ -580,32 +685,38 @@ export function App() {
       ) : (
         <main className="panes">
           <section className="pane left">
-            <div className="tabs">
-              <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')}>Furni</button>
-              <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')}>All members ({furni.members.length})</button>
+            <div className="pane-head">
+              <span className="pane-title"><Icon name="layers" size={14} />Members</span>
+              <span className="spacer" />
+              <span className="segmented">
+                <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')}>Furni</button>
+                <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')}>All ({furni.members.length})</button>
+              </span>
             </div>
-            {lighting && <LightPanel doc={doc} furni={furni} edit={edit} setStatus={setStatus} onClose={() => setLighting(false)} />}
-            {tab === 'furni' ? (
-              <FurniGrid onAddLight={() => setLighting(true)} doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
-            ) : (
-              <table className="members">
-                <tbody>
-                  {furni.members.map((m) => {
-                    const p = parseMemberName(m.name);
-                    return (
-                      <tr key={m.slot} className={sel?.slot === m.slot ? 'selected' : ''} onClick={() => setSelected({ slot: m.slot })} onDoubleClick={() => paint(m.slot)}>
-                        <td className="muted">{m.slot}</td>
-                        <td>{m.type}</td>
-                        <td>{m.name}</td>
-                        <td className="muted">{m.bitmap ? `${m.bitmap.width}×${m.bitmap.height} ${m.bitmap.depth}b` : ''}{p ? ` · ${p.letter} d${p.direction} f${p.frame}` : ''}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-            <div className="fields">
-              {[`${furni.className()}.props`, `${furni.className()}.data`, ALIAS_INDEX, ASSET_INDEX].map((n) => {
+            <div className="pane-body">
+              {lighting && <LightPanel doc={doc} furni={furni} edit={edit} setStatus={setStatus} onClose={() => setLighting(false)} />}
+              {tab === 'furni' ? (
+                <FurniGrid onAddLight={() => setLighting(true)} doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
+              ) : (
+                <table className="members">
+                  <tbody>
+                    {furni.members.map((m) => {
+                      const p = parseMemberName(m.name);
+                      return (
+                        <tr key={m.slot} className={sel?.slot === m.slot ? 'selected' : ''} onClick={() => setSelected({ slot: m.slot })} onDoubleClick={() => paint(m.slot)}>
+                          <td className="muted">{m.slot}</td>
+                          <td><span className="type-badge">{m.type}</span></td>
+                          <td>{m.name}</td>
+                          <td className="muted">{m.bitmap ? `${m.bitmap.width}×${m.bitmap.height} ${m.bitmap.depth}b` : ''}{p ? ` · ${p.letter} d${p.direction} f${p.frame}` : ''}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="pane-foot fields">
+              {[`${furni.isSmallCast() ? 's_' : ''}${furni.className()}.props`, `${furni.isSmallCast() ? 's_' : ''}${furni.className()}.data`, ALIAS_INDEX, ASSET_INDEX].map((n) => {
                 const slot = furni.fieldSlot(n);
                 return slot ? (
                   <button key={n} className={sel?.slot === slot ? 'on' : ''} onClick={() => setSelected({ slot })}>{n}</button>
@@ -619,15 +730,35 @@ export function App() {
             <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} extraColors={flashColors} />
           </section>
           <section className="pane right">
-            {sel ? (
-              <Inspector key={sel.slot} doc={doc} furni={furni} rev={rev} slot={sel.slot} alias={sel.alias} importMode={importMode} setImportMode={setImportMode} edit={edit} onImport={importInto} onExport={exportMember} onDuplicate={duplicate} onDelete={remove} onPaint={paint} />
-            ) : (
-              <div className="inspector muted">Pick a member in the grid, the list or the room.</div>
-            )}
+            <div className="pane-head">
+              <span className="pane-title"><Icon name="inspect" size={14} />Inspector</span>
+            </div>
+            <div className="pane-body">
+              {sel ? (
+                <Inspector key={sel.slot} doc={doc} furni={furni} rev={rev} slot={sel.slot} alias={sel.alias} importMode={importMode} setImportMode={setImportMode} edit={edit} onImport={importInto} onExport={exportMember} onDuplicate={duplicate} onDelete={remove} onPaint={paint} />
+              ) : (
+                <div className="inspector-empty">
+                  <div>
+                    <Icon name="inspect" size={28} />
+                    Pick a member in the grid, the list or the room.
+                    <div className="small" style={{ marginTop: 6 }}>Double-click a picture to paint it.</div>
+                  </div>
+                </div>
+              )}
+            </div>
           </section>
         </main>
       )}
-      <footer className="status">{status}</footer>
+      <footer className="statusbar">
+        <div className="msg"><span>{status || (ready ? 'Ready' : 'Loading DirPlayer…')}</span></div>
+        <span className="spacer" />
+        <div className="hints">
+          {doc && <span><kbd>Alt</kbd><kbd>S</kbd> 64 / 32 px</span>}
+          {doc && painting === null && <span>double-click: paint</span>}
+          {painting !== null && <span><kbd>Esc</kbd> done · <kbd>⌘Z</kbd> undo</span>}
+        </div>
+      </footer>
+      {dragging && <div className="drop-overlay">Drop casts, a .swf or an image</div>}
     </div>
   );
 }

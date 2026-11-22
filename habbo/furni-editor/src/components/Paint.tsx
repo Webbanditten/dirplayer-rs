@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { CastDocument as CastDocumentClass } from '../wasm';
@@ -406,11 +407,12 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
   return (
     <div className="paint">
       <div className="paint-head">
-        <b>Paint: {member.name}</b>
-        <span className="muted">{cur.img.w}×{cur.img.h}, {indexed ? '8-bit' : '32-bit'}, reg {cur.regX}, {cur.regY}</span>
+        <span className="pane-title"><Icon name="brush" size={14} />Paint</span>
+        <span className="member">{member.name}</span>
+        <span className="muted small">{cur.img.w}×{cur.img.h}, {indexed ? '8-bit' : '32-bit'}, reg {cur.regX}, {cur.regY}</span>
         <span className="spacer" />
-        <button onClick={undo} disabled={!past.current.length} title="Ctrl/Cmd+Z">↶ Undo</button>
-        <button onClick={redo} disabled={!future.current.length} title="Ctrl/Cmd+Y">↷ Redo</button>
+        <button className="icon" onClick={undo} disabled={!past.current.length} title="Undo (Ctrl/Cmd+Z)"><Icon name="undo" /></button>
+        <button className="icon" onClick={redo} disabled={!future.current.length} title="Redo (Ctrl/Cmd+Y)"><Icon name="redo" /></button>
         <button onClick={() => commit({ img: flip(cur.img, true), regX: cur.img.w - cur.regX }, 'Flipped horizontally')}>⇋ Flip</button>
         <button onClick={() => commit({ img: flip(cur.img, false), regY: cur.img.h - cur.regY }, 'Flipped vertically')}>⇵ Flip</button>
         <select value="" onChange={(e) => e.target.value && commit({ img: blur(cur.img, +e.target.value, cur.palette) }, `Blurred ${member.name}`)} title="Soften the picture (a glow: draw a bright shape on black, then blur it)">
@@ -418,8 +420,9 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
           {[1, 2, 3, 5, 8].map((r) => <option key={r} value={r}>radius {r}</option>)}
         </select>
         <button onClick={() => setResizeOpen(!resizeOpen)}>Canvas size…</button>
-        <button className="primary" onClick={onClose} title="Esc">Done</button>
+        <button className="primary" onClick={onClose} title="Esc"><Icon name="check" size={14} />Done</button>
       </div>
+      <div className="paint-main">
       {resizeOpen && <ResizeForm img={cur.img} onApply={(w, h, ax, ay) => {
         const r = resize(cur.img, w, h, ax, ay, transparentInk);
         commit({ img: r.img, regX: cur.regX + r.dx, regY: cur.regY + r.dy }, `Canvas ${w}×${h}`);
@@ -527,6 +530,7 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
             </select>
           </>
         )}
+      </div>
       </div>
     </div>
   );

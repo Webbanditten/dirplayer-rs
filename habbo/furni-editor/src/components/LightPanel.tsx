@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { useEffect, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { stateNames, type Furni } from '../furni';
@@ -40,10 +41,10 @@ export function LightPanel({ doc, furni, edit, setStatus, onClose }: Props) {
   return (
     <div className="light-panel">
       <div className="row">
-        <b>Add light</b>
+        <span className="pane-title"><Icon name="sun" size={14} />Add light</span>
         <span className="muted small">an ink 33 (add) layer, like rare_dragonlamp's halo and hc2_biglamp's floor light</span>
         <span className="spacer" />
-        <button onClick={onClose}>Cancel</button>
+        <button className="icon ghost" onClick={onClose} title="Cancel"><Icon name="close" /></button>
       </div>
       <div className="row">
         <label><input type="radio" checked={kind === 'halo'} onChange={() => setKind('halo')} /> halo (around a point)</label>

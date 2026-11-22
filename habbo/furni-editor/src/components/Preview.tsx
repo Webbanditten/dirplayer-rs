@@ -1,3 +1,5 @@
+import type React from 'react';
+import { Icon } from './Icon';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { Animator, FPS } from '../animation';
@@ -211,67 +213,64 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
   const letters = probe?.letters ?? [];
   return (
     <div className="preview">
-      <div className="preview-controls">
-        <div className="row">
-          <span>Direction</span>
+      <div className="pane-head">
+        <span className="pane-title"><Icon name="room" size={14} />Room</span>
+        <span className="dir-pills" title="Direction">
           {[0, 1, 2, 3, 4, 5, 6, 7].map((d) => (
             <button key={d} className={`dir${d === direction ? ' on' : ''}`} onClick={() => setDirection(d)} disabled={allDirections || (own.length > 0 && !own.includes(d))} title={own.length && !own.includes(d) ? 'The furni has no members for this direction (the client never turns it here)' : `Direction ${d}`}>
               {d}
             </button>
           ))}
-          <button onClick={() => setDirection(own.length ? rotateDirection(direction, own) : (direction + 2) % 8)} disabled={allDirections} title="Turn like the client does (to the next direction the furni has)">⟳</button>
-          {probe && probe.direction !== direction && !allDirections && <span className="muted">shows {probe.direction}</span>}
-          <label><input type="checkbox" checked={allDirections} onChange={(e) => setAllDirections(e.target.checked)} /> all</label>
-        </div>
-        <div className="row">
-          <span>State</span>
-          <select value={state} onChange={(e) => setState(+e.target.value)}>
-            {states.map((s, i) => <option key={i} value={i}>{i}: {s}</option>)}
+        </span>
+        <button className="icon" onClick={() => setDirection(own.length ? rotateDirection(direction, own) : (direction + 2) % 8)} disabled={allDirections} title="Turn like the client does (to the next direction the furni has)">
+          <Icon name="rotate" />
+        </button>
+        <label className="chip" title="Every direction the furni has, side by side"><input type="checkbox" checked={allDirections} onChange={(e) => setAllDirections(e.target.checked)} />all</label>
+        {probe && probe.direction !== direction && !allDirections && <span className="muted small">shows {probe.direction}</span>}
+        <span className="spacer" />
+        <select value={state} onChange={(e) => setState(+e.target.value)} title="State (.data)">
+          {states.map((s, i) => <option key={i} value={i}>{i}: {s}</option>)}
+        </select>
+        <button className={`icon${playing && moves ? ' primary' : ''}`} onClick={() => setPlaying(!playing)} disabled={!moves} title={moves ? (playing ? 'Pause' : 'Play') : 'This state doesn\'t move'}>
+          <Icon name={playing && moves ? 'pause' : 'play'} />
+        </button>
+        <span className="frame-count">{moves ? `frame ${tick}` : 'still'}</span>
+      </div>
+      <div className="preview-sub">
+        <input className="colors" placeholder="#FFFFFF,#F7EBBC (items_definitions.colour)" value={colors} onChange={(e) => setColors(e.target.value)} title="Part colours" spellCheck={false} />
+        {variants.length > 0 && (
+          <select value={variants.findIndex((v) => v.colour === colors)} onChange={(e) => setColors(variants[+e.target.value]?.colour ?? colors)} title="Colour variants (the hotel's items_definitions, or the imported Flash file's)">
+            <option value={-1}>colours…</option>
+            {variants.map((v, i) => <option key={i} value={i}>{v.label}</option>)}
           </select>
-          <button onClick={() => setPlaying(!playing)} disabled={!moves}>{playing && moves ? '❚❚ Pause' : '▶ Play'}</button>
-          {moves && <span className="muted">frame {tick}</span>}
-          {!moves && <span className="muted">still</span>}
-          <span className="spacer" />
-          <label><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} /> shadow</label>
-          {hasSmall && !smallCast && <label><input type="checkbox" checked={small} onChange={(e) => setSmall(e.target.checked)} /> small (32)</label>}
-        </div>
-        <div className="row">
-          <span>Colours</span>
-          <input className="colors" placeholder="#FFFFFF,#F7EBBC (items_definitions.colour)" value={colors} onChange={(e) => setColors(e.target.value)} />
-          {variants.length > 0 && (
-            <select value={variants.findIndex((v) => v.colour === colors)} onChange={(e) => setColors(variants[+e.target.value]?.colour ?? colors)} title="Colour variants (the hotel's items_definitions, or the imported Flash file's)">
-              <option value={-1}>colours…</option>
-              {variants.map((v, i) => <option key={i} value={i}>{v.label}</option>)}
-            </select>
-          )}
-        </div>
-        <div className="row">
-          <span>Layers</span>
+        )}
+        <span className="layer-chips" title="Layers">
           {letters.map((l) => (
-            <label key={l}><input type="checkbox" checked={!hidden.has(l)} onChange={() => { const n = new Set(hidden); n.has(l) ? n.delete(l) : n.add(l); setHidden(n); }} />{l}</label>
+            <label key={l} className="chip" style={{ '--hue': (28 + (l.charCodeAt(0) - 97) * 67) % 360 } as React.CSSProperties}><input type="checkbox" checked={!hidden.has(l)} onChange={() => { const n = new Set(hidden); n.has(l) ? n.delete(l) : n.add(l); setHidden(n); }} />{l}</label>
           ))}
-          <span className="spacer" />
-          <label><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} /> grid</label>
-          <label><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} /> tiles</label>
-          <input type="color" value={floor} onChange={(e) => setFloor(e.target.value)} title="Floor" />
-          <label title="Draw the room on a transparent background (saved pictures keep it)"><input type="checkbox" checked={transparent} onChange={(e) => setTransparent(e.target.checked)} /> transparent</label>
-          {!transparent && <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} title="Background" />}
-          <select value={zoom} onChange={(e) => setZoom(+e.target.value)}>
-            <option value={0}>fit</option>
-            {[1, 2, 3, 4].map((z) => <option key={z} value={z}>{z}×</option>)}
-          </select>
-        </div>
+        </span>
       </div>
       <div className="preview-stage" ref={stage}>
         {probe ? (
           <canvas ref={canvas} onClick={pick} className={transparent ? 'checker' : undefined} style={{ width: room.width * shownZoom, height: room.height * shownZoom }} title="Click a layer to select its member" />
         ) : (
-          <p className="muted">No floor furni layers found (layer a: &lt;class&gt;_a_0_&lt;w&gt;_&lt;l&gt;_&lt;dir&gt;_&lt;frame&gt;).</p>
+          <p className="empty">No floor furni layers found (layer a: <code>&lt;class&gt;_a_0_&lt;w&gt;_&lt;l&gt;_&lt;dir&gt;_&lt;frame&gt;</code>).</p>
         )}
       </div>
-      <div className="row">
-        <button disabled={!probe} onClick={savePicture} title="The room as drawn now, as a PNG">Save picture</button>
-        {selected !== null && <span className="muted small">Selected member #{selected}</span>}
+      <div className="pane-foot preview-foot">
+        <label className="chip"><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />shadow</label>
+        <label className="chip"><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} />grid</label>
+        <label className="chip" title="Light up the tiles the furni stands on (as Odin counts them)"><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} />tiles</label>
+        {hasSmall && !smallCast && <label className="chip" title="The 32 px members in this cast"><input type="checkbox" checked={small} onChange={(e) => setSmall(e.target.checked)} />32 px</label>}
+        <label className="chip" title="Draw the room on a transparent background (saved pictures keep it)"><input type="checkbox" checked={transparent} onChange={(e) => setTransparent(e.target.checked)} />transparent</label>
+        <label className="swatch-label" title="Floor">floor <input type="color" value={floor} onChange={(e) => setFloor(e.target.value)} /></label>
+        {!transparent && <label className="swatch-label" title="Background">bg <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} /></label>}
+        <span className="spacer" />
+        <select value={zoom} onChange={(e) => setZoom(+e.target.value)} title="Zoom">
+          <option value={0}>fit</option>
+          {[1, 2, 3, 4].map((z) => <option key={z} value={z}>{z}×</option>)}
+        </select>
+        <button className="icon" disabled={!probe} onClick={savePicture} title="Save picture: the room as drawn now, as a PNG"><Icon name="camera" /></button>
       </div>
     </div>
   );

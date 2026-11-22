@@ -1,3 +1,5 @@
+import type React from 'react';
+import { Icon } from './Icon';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { parseMemberName, type Furni, type Member } from '../furni';
 import { Thumb } from './Thumb';
@@ -107,16 +109,17 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
   return (
     <div className="grid">
       <div className="grid-head">
-        <b>{g.cls || '(no class)'}</b> <span className="muted">{g.dims[0]}×{g.dims[1]} tiles</span>
+        <span className="cls-name">{g.cls || '(no class)'}</span>
+        <span className="dims">{g.dims[0]}×{g.dims[1]} tiles</span>
         <span className="spacer" />
-        {onAddLight && <button onClick={onAddLight} title="Add a glow layer (ink 33), like the dragon lamp's halo or the HC lamp's floor light">Add light…</button>}
+        {onAddLight && <button onClick={onAddLight} title="Add a glow layer (ink 33), like the dragon lamp's halo or the HC lamp's floor light"><Icon name="sun" size={14} />Light…</button>}
         <button onClick={onMirror} title="Add memberalias.index lines so directions 4 and 6 show 2 and 0 mirrored, where they have no members of their own">
-          Mirror 2→4, 0→6
+          <Icon name="mirror" size={14} />2→4, 0→6
         </button>
       </div>
-      {g.rows.map((row) => (
+      {g.rows.map((row, i) => (
         <div key={row.letter} className="layer-row">
-          <div className="layer-name">{row.letter}</div>
+          <div className="layer-name" style={{ '--hue': (28 + i * 67) % 360 } as React.CSSProperties} title={`Layer ${row.letter}`}>{row.letter}</div>
           <div className="layer-dirs">
             {dirsUsed.map((d) => {
               const frames = row.dirs.get(d);
@@ -155,14 +158,14 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
         </div>
       ))}
       <div className="layer-row">
-        <div className="layer-name">+</div>
+        <div className="layer-name plain">+</div>
         <button className="add wide" onClick={() => onAddLayer(nextLetter)} title="Import an image as a new layer (direction and frame 0 of the first direction)">
-          New layer {nextLetter}
+          <Icon name="plus" size={13} />New layer {nextLetter}
         </button>
       </div>
       {g.shadows.length > 0 && (
         <div className="layer-row">
-          <div className="layer-name">sd</div>
+          <div className="layer-name plain" title="Shadow">sd</div>
           <div className="frames">
             {g.shadows.map((c) => (
               <div key={c.name} className="frame">
@@ -175,7 +178,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
       )}
       {g.icons.length > 0 && (
         <div className="layer-row">
-          <div className="layer-name">icon</div>
+          <div className="layer-name plain">icon</div>
           <div className="frames">
             {g.icons.map((c) => (
               <div key={c.name} className="frame">
@@ -188,7 +191,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
       )}
       {g.small.length > 0 && (
         <div className="layer-row">
-          <div className="layer-name" title="The small room zoom (s_ members)">32 px</div>
+          <div className="layer-name plain" title="The small room zoom (s_ members)">32</div>
           <div className="frames">
             {g.small.map((m) => (
               <div key={m.slot} className="frame">
@@ -201,7 +204,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
       )}
       {g.other.length > 0 && (
         <div className="layer-row">
-          <div className="layer-name">other</div>
+          <div className="layer-name plain">etc</div>
           <div className="frames">
             {g.other.map((m) => (
               <div key={m.slot} className="frame">
