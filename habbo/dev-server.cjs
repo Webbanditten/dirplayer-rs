@@ -45,7 +45,7 @@ const VARS_UPSTREAM = process.env.VARS_UPSTREAM || '';
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 23), ...a);
 
-function page(sso, forward, large) {
+function page(sso, forward, large, depth) {
   const self = `http://127.0.0.1:${PORT}`;
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // Same params as OdinCMS Views/Client/Index.cshtml. The game/MUS host+port stay what the client is told;
@@ -57,6 +57,8 @@ function page(sso, forward, large) {
     sw4: `connection.mus.host=${GAME_HOST};connection.mus.port=${MUS_PORT}`,
     sw5: `external.variables.txt=${self}/assets/gamedata/external_variables.txt;external.texts.txt=${self}/assets/gamedata/external_texts.txt`,
     sw6: `use.sso.ticket=1;sso.ticket=${sso}`,
+    // The room's draw order from the furni footprints (vm-rust habbo_depth.rs); ?depth=0 draws by locZ alone.
+    habbo_room_depth: depth === '0' ? '0' : '1',
   };
   // ?forward=public,<roomId> | private,<roomId> | <type>,<id>: the CMS client's sw7 room forward. The client
   // (Navigator Component goStraightToRoom) treats type 1 as public and anything else as private. For public
@@ -162,7 +164,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(page(url.searchParams.get('sso') || '', url.searchParams.get('forward'), url.searchParams.get('large') === '1'));
+    return res.end(page(url.searchParams.get('sso') || '', url.searchParams.get('forward'), url.searchParams.get('large') === '1', url.searchParams.get('depth')));
   }
   if (url.pathname === '/dirplayer-polyfill.js') {
     if (!fs.existsSync(POLYFILL)) { res.writeHead(404); return res.end('run npm run build-polyfill'); }

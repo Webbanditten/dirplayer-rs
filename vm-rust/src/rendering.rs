@@ -1823,6 +1823,9 @@ pub fn render_score_to_bitmap_with_offset(
     offset: (i32, i32),
     parent_props: Option<FilmLoopParentProps>,
 ) {
+    if matches!(score_source, ScoreRef::Stage) {
+        crate::player::habbo_depth::refresh(player);
+    }
     let palettes = player.movie.cast_manager.palettes();
 
     // For filmloops, use transparent background so sprites composite correctly

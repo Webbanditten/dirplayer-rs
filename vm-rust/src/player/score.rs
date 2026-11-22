@@ -160,6 +160,10 @@ pub struct Score {
     pub sorted_channels_cache: RefCell<Option<(u32, u64, Vec<usize>)>>,
     /// Incremented when runtime sprite state changes in a way that affects render inclusion/order.
     pub render_channel_cache_generation: u64,
+    /// Habbo fork: the room's draw order from `habbo_depth::refresh` (channel -> sort key), when switched on.
+    pub habbo_depth: RefCell<Option<std::rc::Rc<HashMap<usize, i64>>>>,
+    /// Bumped whenever `habbo_depth` changes, so the sorted-channel cache is rebuilt.
+    pub habbo_depth_version: std::cell::Cell<u64>,
 }
 
 fn get_sprite_rect(player: &DirPlayer, sprite_id: i16) -> IntRectTuple {
@@ -331,6 +335,8 @@ impl Score {
             active_channels_cache: RefCell::new(HashMap::new()),
             sorted_channels_cache: RefCell::new(None),
             render_channel_cache_generation: 0,
+            habbo_depth: RefCell::new(None),
+            habbo_depth_version: std::cell::Cell::new(0),
         }
     }
 
@@ -3529,7 +3535,7 @@ impl Score {
     }
 
     pub fn get_sorted_channels(&self, frame_num: u32) -> Vec<&SpriteChannel> {
-        let generation = self.render_channel_cache_generation;
+        let generation = self.render_channel_cache_generation ^ self.habbo_depth_version.get().rotate_left(32);
         if let Some((cached_frame, cached_generation, cached_indices)) =
             self.sorted_channels_cache.borrow().as_ref()
         {
@@ -3561,10 +3567,16 @@ impl Score {
             })
         });
 
+        let habbo_depth = self.habbo_depth.borrow().clone();
         channel_indices.sort_by(|a, b| {
             let a_channel = &self.channels[*a];
             let b_channel = &self.channels[*b];
-            let res = a_channel.sprite.loc_z.cmp(&b_channel.sprite.loc_z);
+            let res = match &habbo_depth {
+                // Habbo fork: the room's order from the furni footprints (habbo_depth.rs).
+                Some(keys) => crate::player::habbo_depth::key(keys, a_channel.number, a_channel.sprite.loc_z)
+                    .cmp(&crate::player::habbo_depth::key(keys, b_channel.number, b_channel.sprite.loc_z)),
+                None => a_channel.sprite.loc_z.cmp(&b_channel.sprite.loc_z),
+            };
             if res == std::cmp::Ordering::Equal {
                 a_channel.number.cmp(&b_channel.number)
             } else {

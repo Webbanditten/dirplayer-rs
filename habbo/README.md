@@ -74,6 +74,18 @@ headless Chromium, for the CMS's featured rooms. See [photographer/README.md](ph
 This fork runs Habbo Danmark only. Where Habbo and another movie need opposite behaviour, Habbo wins, and the
 change is listed here so a rebase onto upstream can keep or drop it on purpose.
 
+- **Room draw order from the furni footprints** (`vm-rust/src/player/habbo_depth.rs`; only with the external param
+  `habbo_room_depth=1`, which the CMS web client and this harness set, and only in guest rooms). The client gives a
+  room sprite `locZ = 1000 * (x + y + 1) + zshift` from the object's origin tile, so a furni's size doesn't count and
+  neighbours on the same diagonal interleave their layers (Biblioteket: a chair's arm over a 2-tile shelf in front
+  of it, a gate over a chair's seat but under its arm; drinks under the table top, because small rooms leave the
+  height out). Before drawing, the furni (`pActiveObjList`) and avatars/pets (`pUserObjList`) of "Room Component
+  Class" are sorted: objects on separate tiles by footprint (behind first; side by side, the right one in front),
+  objects sharing a tile as the client had them (sitting stays as it is) or the higher furni after the lower, each
+  object's layers and the floor layers (shadows, carpets) in the client's order. The sprites take their own depth
+  values in that order, so walls, wall items and the interface keep their places, and Lingo still reads its own
+  `locZ`; drawing and clicking use the new order. `?depth=0` in the harness draws by `locZ` alone. Furni casts are
+  never changed for this.
 - **No sprite tint on 32-bit bitmaps under ink 0/8/9** (WebGL2 `sprite_tints_32bit`, Canvas2D `sprite_tints` in
   `drawing.rs`). Fuse windows pass an element's `#color`/`#bgColor` to `copyPixels` (into the element's 32-bit
   buffer, which tints it) and to the sprite that shows the buffer, so tinting on the sprite too applied it twice
