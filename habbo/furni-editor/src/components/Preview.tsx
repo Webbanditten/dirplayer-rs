@@ -6,6 +6,9 @@ import { composite, drawFloor, fitRoom, footprint, roomLayout, tileLoc, type Pla
 import { spriteRect } from '../furni';
 import { download, encodePng } from '../wasm';
 
+/** The CMS furni API through the dev server's proxy (vite.config.js); a static build (GitHub Pages) has no proxy. */
+const HOTEL_API = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV ? '/hotel-api' : null;
+
 function stored(key: string, fallback: string) {
   try {
     return localStorage.getItem('furniEditor.' + key) ?? fallback;
@@ -73,8 +76,8 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
     let live = true;
     setHotel([]);
     setColors(extraColors[0]?.colour ?? '');
-    if (!cls) return;
-    fetch(`/hotel-api/furni/search?query=${encodeURIComponent(cls)}`)
+    if (!cls || !HOTEL_API) return;
+    fetch(`${HOTEL_API}/furni/search?query=${encodeURIComponent(cls)}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((list: HotelFurni[]) => {
         if (!live || !Array.isArray(list)) return;
