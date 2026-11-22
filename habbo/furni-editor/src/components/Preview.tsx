@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { Animator, FPS } from '../animation';
-import { floorSetup, ownDirections, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
+import { floorSetup, ownDirections, rotateDirection, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
 import { composite, drawFloor, fitRoom, footprint, roomLayout, tileLoc, type Placement, type RoomLayout } from '../room';
 import { spriteRect } from '../furni';
 import { download, encodePng } from '../wasm';
@@ -101,12 +101,16 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
   const probe = useMemo(() => floorSetup(furni, { direction, state, colors, shadow, small: useSmall }), [furni, direction, state, colors, shadow, useSmall]);
   const states = probe ? stateNames(probe.data) : ['default'];
   const own = useMemo(() => ownDirections(furni, useSmall), [furni, useSmall]);
+  // Stay on directions the furni has: 2 when it has it, else its first.
+  useEffect(() => {
+    if (own.length && !own.includes(direction)) setDirection(own.includes(2) ? 2 : own[0]);
+  }, [own, direction]);
 
   // Where furni go: one in the middle, or every direction it has side by side.
   const { room, placed } = useMemo(() => {
     const dims = probe?.dims ?? [1, 1];
     const span = Math.max(dims[0], dims[1]) + 1;
-    const dirs = allDirections ? [0, 2, 4, 6].filter((d) => floorSetup(furni, { direction: d, state, small: useSmall })?.direction === d) : [direction];
+    const dirs = allDirections ? (own.length ? own : [direction]) : [direction];
     const cols = allDirections ? Math.max(1, dirs.length) * span + 1 : span + 1;
     const rows = span + 1;
     const placed: Placed[] = [];
@@ -117,7 +121,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
     });
     const room = fitRoom(roomLayout({ cols, rows }), placed.map((p) => ({ x: p.x, y: p.y, layers: p.setup.layersAt() })));
     return { room, placed };
-  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe]);
+  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own]);
 
   const floorPixels = useMemo(() => {
     const highlight = new Set<string>();
@@ -209,11 +213,11 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [] }:
         <div className="row">
           <span>Direction</span>
           {[0, 1, 2, 3, 4, 5, 6, 7].map((d) => (
-            <button key={d} className={`dir${d === direction ? ' on' : ''}${own.includes(d) ? ' own' : ''}`} onClick={() => setDirection(d)} disabled={allDirections} title={own.includes(d) ? 'Has members of its own' : 'Alias or direction 0 fallback'}>
+            <button key={d} className={`dir${d === direction ? ' on' : ''}`} onClick={() => setDirection(d)} disabled={allDirections || (own.length > 0 && !own.includes(d))} title={own.length && !own.includes(d) ? 'The furni has no members for this direction (the client never turns it here)' : `Direction ${d}`}>
               {d}
             </button>
           ))}
-          <button onClick={() => setDirection((direction + 2) % 8)} disabled={allDirections} title="Turn like the client (by 2)">⟳</button>
+          <button onClick={() => setDirection(own.length ? rotateDirection(direction, own) : (direction + 2) % 8)} disabled={allDirections} title="Turn like the client does (to the next direction the furni has)">⟳</button>
           {probe && probe.direction !== direction && !allDirections && <span className="muted">shows {probe.direction}</span>}
           <label><input type="checkbox" checked={allDirections} onChange={(e) => setAllDirections(e.target.checked)} /> all</label>
         </div>

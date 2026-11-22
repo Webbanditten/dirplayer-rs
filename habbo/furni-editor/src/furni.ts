@@ -334,7 +334,9 @@ export function floorSetup(furni: Furni, options: FloorOptions): FloorSetup | nu
   return { cls, props, data, direction, dims, letters: slots.map((s) => s.letter), layersAt };
 }
 
-/** Which directions have members of their own (not the direction-0 fallback) for layer a. */
+/** The directions the furni can be turned to: those with a layer a member or memberalias.index name of their own (the
+ *  client's rotate only moves to a direction whose member exists; a direction without one would draw direction 0's
+ *  members, which never happens in a room). */
 export function ownDirections(furni: Furni, small = false): number[] {
   const cls = (small ? 's_' : '') + furni.className();
   const out = new Set<number>();
@@ -345,6 +347,17 @@ export function ownDirections(furni: Furni, small = false): number[] {
     if (p) out.add(p.direction);
   }
   return [...out].sort((a, b) => a - b);
+}
+
+/** The next direction after `from`, as the client's rotate (Active Object Class) picks it: (d + 2 + j) mod 8 for
+ *  j = 0..3, the first that exists. */
+export function rotateDirection(from: number, available: number[]): number {
+  let d = from;
+  for (let j = 0; j < 4; j++) {
+    d = (d + 2 + j) % 8;
+    if (available.includes(d)) return d;
+  }
+  return from;
 }
 
 /** Where a layer's sprite goes: its rect's top left for a furni whose tile is at (locH, locV). */
