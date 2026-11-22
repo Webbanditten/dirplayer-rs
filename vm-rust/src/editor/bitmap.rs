@@ -34,6 +34,7 @@ impl ImportMode {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportReport {
     pub depth: u8,
     /// Opaque pixels whose colour wasn't in the palette (indexed import; they took the nearest colour).

@@ -200,6 +200,7 @@ impl CastMemberRec {
 
 /// The fields of a bitmap member's specific data the editor reads and writes.
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BitmapHeader {
     pub width: i32,
     pub height: i32,

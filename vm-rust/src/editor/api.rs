@@ -130,6 +130,27 @@ impl CastDocument {
         self.doc.save()
     }
 
+    /// Decode a PNG/GIF/JPEG to `[width u32 LE, height u32 LE, RGBA...]`, pixels exactly as stored (no colour
+    /// management, no premultiplying, unlike a browser canvas).
+    #[wasm_bindgen(js_name = decodeImage)]
+    pub fn decode_image(bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+        let img = image::load_from_memory(bytes).map_err(|e| err(e.to_string()))?.to_rgba8();
+        let mut out = Vec::with_capacity(8 + img.as_raw().len());
+        out.extend_from_slice(&img.width().to_le_bytes());
+        out.extend_from_slice(&img.height().to_le_bytes());
+        out.extend_from_slice(img.as_raw());
+        Ok(out)
+    }
+
+    /// Encode RGBA pixels as a PNG.
+    #[wasm_bindgen(js_name = encodePng)]
+    pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, JsValue> {
+        let img = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| err("Wrong pixel count".into()))?;
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).map_err(|e| err(e.to_string()))?;
+        Ok(out.into_inner())
+    }
+
     /// Draw members like sprites. `specJson`: `{width, height, sprites: [{slot, left, top, flipH, flipV, ink, blend,
     /// color: [r,g,b]?, bgColor: [r,g,b]?}]}`; `background`: RGBA of the canvas size, or empty for white.
     pub fn render(&self, spec_json: &str, background: &[u8]) -> Result<Vec<u8>, JsValue> {
