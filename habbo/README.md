@@ -85,9 +85,11 @@ change is listed here so a rebase onto upstream can keep or drop it on purpose.
   neighbours on the same diagonal interleave their layers (Biblioteket: a chair's arm over a 2-tile shelf in front
   of it, a gate over a chair's seat but under its arm; drinks under the table top, because small rooms leave the
   height out). Before drawing, the furni (`pActiveObjList`) and avatars/pets (`pUserObjList`) of "Room Component
-  Class" are sorted: objects on separate tiles by footprint (behind first; side by side, the right one in front),
-  objects sharing a tile as the client had them (sitting stays as it is) or the higher furni after the lower, each
-  object's layers and the floor layers (shadows, carpets) in the client's order. The sprites take their own depth
+  Class" are sorted: objects on separate tiles at the same height by footprint (behind first; side by side, the
+  right one in front), objects sharing a tile as the client had them (sitting stays as it is) or the higher furni
+  after the lower; stacked builds (separate tiles at different heights), light and shadow effects (additive and
+  subtractive inks, nearly transparent layers), each object's own layers and the floor layers (shadows, carpets) keep
+  the client's order. Checked against a stacking build ("The Vault": its piles and rainbow glows unchanged). The sprites take their own depth
   values in that order, so walls, wall items and the interface keep their places, and Lingo still reads its own
   `locZ`; drawing and clicking use the new order. `?depth=0` in the harness draws by `locZ` alone. Furni casts are
   never changed for this.

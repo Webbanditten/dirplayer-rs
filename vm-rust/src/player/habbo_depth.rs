@@ -8,10 +8,12 @@
 //!
 //! This pass re-orders the sprites of the room's furni (`pActiveObjList` of "Room Component Class") and avatars/pets
 //! (`pUserObjList`) when drawing, from the objects' floor footprints:
-//! - sprites of objects on separate tiles: the object behind (by footprint) first; side by side on the same diagonal,
-//!   the one further right in front;
+//! - sprites of objects on separate tiles at the same height: the object behind (by footprint) first; side by side on
+//!   the same diagonal, the one further right in front;
 //! - sprites of objects that share a tile: as the client ordered them (`locZ`), so sitting and lying stay as they are;
 //!   a furni standing higher on the same tiles (drinks on a table) after the one below it;
+//! - objects on separate tiles at different heights (stacked builds), and light and shadow effects (additive and
+//!   subtractive inks, nearly transparent layers) against other objects, as the client ordered them;
 //! - an object's own layers keep their order; floor layers (shadows, carpets: far below their object) stay first.
 //! The sorted sprites take the depth values they had, in the new order, so walls, wall items and the interface keep
 //! their places; sprites the client keeps right next to an object's sprite (matte, shadow, sign) follow it.
@@ -39,6 +41,13 @@ const ATTACH_SLOT: i64 = 16;
 const ATTACH_RANGE: i32 = 4;
 /// A furni layer this far below its object's base depth is a floor layer (shadow -4000, carpet -32001).
 const FLOOR_OFFSET: i64 = -1500;
+/// Objects on separate tiles are ordered by footprint only when they stand at the same height.
+const SAME_LEVEL: f64 = 0.05;
+/// Light and shadow effects keep the client's order against other objects: additive and subtractive inks (a lamp's
+/// halo, a rainbow's light; they reach far beyond their furni and Sulake placed them with zshift) and nearly
+/// transparent layers.
+const EFFECT_INKS: [i32; 4] = [33, 34, 35, 38];
+const EFFECT_BLEND_BELOW: i32 = 40;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -65,6 +74,8 @@ pub struct Spr {
     pub z: i32,
     pub rect: IntRect,
     pub floor: bool,
+    /// A light or shadow effect layer (see EFFECT_INKS).
+    pub effect: bool,
 }
 
 impl Obj {
@@ -151,8 +162,12 @@ pub fn order(objs: &[Obj], sprs: &[Spr]) -> Vec<(usize, i64)> {
                 } else {
                     by_z(i, j)
                 }
-            } else {
+            } else if (oa.h - ob.h).abs() < SAME_LEVEL && !a.effect && !b.effect {
                 footprint_order(oa, ob)
+            } else {
+                // At different heights the client's depth (diagonal plus height in big rooms) decides, so stacked
+                // builds look as they were built; light and shadow effects stay where the client put them.
+                by_z(i, j)
             };
             match ord {
                 Ordering::Less => add(i, j, &mut succ, &mut indeg),
@@ -329,7 +344,8 @@ fn collect(player: &DirPlayer) -> Option<(Vec<Obj>, Vec<Spr>)> {
             return;
         }
         let floor = base.is_some_and(|b| (sprite.loc_z as f64 - b) < FLOOR_OFFSET as f64);
-        sprs.push(Spr { channel, obj, z: sprite.loc_z, rect, floor });
+        let effect = base.is_some() && (EFFECT_INKS.contains(&sprite.ink) || sprite.blend < EFFECT_BLEND_BELOW);
+        sprs.push(Spr { channel, obj, z: sprite.loc_z, rect, floor, effect });
     };
 
     for furni in instances(player, prop(player, component, "pActiveObjList")) {
@@ -432,7 +448,7 @@ mod tests {
         Obj { kind: Kind::User, x0: x, x1: x, y0: y, y1: y, h: 0.0 }
     }
     fn spr(channel: usize, obj: usize, z: i32) -> Spr {
-        Spr { channel, obj, z, rect: IntRect { left: 0, top: 0, right: 100, bottom: 100 }, floor: false }
+        Spr { channel, obj, z, rect: IntRect { left: 0, top: 0, right: 100, bottom: 100 }, floor: false, effect: false }
     }
     /// Channels in draw order.
     fn drawn(objs: &[Obj], sprs: &[Spr]) -> Vec<usize> {
@@ -521,6 +537,32 @@ mod tests {
     }
 
     #[test]
+    fn stacks_at_other_heights_keep_the_clients_order() {
+        // The Vault: a money bag at height 2.6 on (9,1) behind a rainbow at 1.5 on (9,2). In big rooms the client
+        // adds 1000 per height unit, so the bag (behind but higher) is drawn over the rainbow; that stays.
+        let mut bag = furni(9, 1, 1, 1);
+        bag.h = 2.6;
+        let mut rainbow = furni(9, 2, 1, 1);
+        rainbow.h = 1.5;
+        let objs = [bag, rainbow];
+        let sprs = [spr(1, 0, z(9, 1, 2600 - 6)), spr(2, 1, z(9, 2, 1500 - 4)), spr(3, 1, z(9, 2, 1500 - 6))];
+        let o = drawn(&objs, &sprs);
+        assert!(before(&o, 2, 1) && before(&o, 3, 1), "{o:?}");
+    }
+
+    #[test]
+    fn a_glow_keeps_the_clients_order() {
+        // A lamp's halo (additive) on the same level as a shelf in front of the lamp: the halo stays over the shelf as
+        // the client drew it, the lamp's body goes behind the shelf.
+        let objs = [furni(9, 13, 1, 1), furni(8, 15, 2, 1)];
+        let mut halo = spr(1, 0, z(9, 13, 1100));
+        halo.effect = true;
+        let sprs = [halo, spr(2, 0, z(9, 13, -6)), spr(3, 1, z(8, 15, -6))];
+        let o = drawn(&objs, &sprs);
+        assert!(before(&o, 3, 1) && before(&o, 2, 3), "{o:?}");
+    }
+
+    #[test]
     fn keys_reuse_the_sprites_own_depths() {
         let objs = [furni(9, 14, 1, 1), furni(8, 15, 2, 1)];
         let sprs = [spr(1, 0, z(9, 14, 29)), spr(3, 1, z(8, 15, -6))];
@@ -555,7 +597,7 @@ mod bench {
             let (sx, sy) = ((x - y) * 16 + 400, (x + y) * 8 + 40);
             for k in 0..if user { 3 } else { 4 } {
                 let z = 1000 * (x + y + 1) + rnd(80) - 40 + k;
-                sprs.push(Spr { channel: sprs.len() + 1, obj: i, z, rect: IntRect { left: sx - 10, top: sy - 40, right: sx + 30, bottom: sy + 8 }, floor: false });
+                sprs.push(Spr { channel: sprs.len() + 1, obj: i, z, rect: IntRect { left: sx - 10, top: sy - 40, right: sx + 30, bottom: sy + 8 }, floor: false, effect: false });
             }
         }
         let t = std::time::Instant::now();
