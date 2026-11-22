@@ -125,3 +125,6 @@ code { font: 12px ui-monospace, Menlo, monospace; }
 .hidden-color { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
 .palette-tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .paint-resize { background: var(--panel); border: 1px solid var(--line); padding: 4px 6px; border-radius: 4px; }
+
+.light-panel { border: 1px solid var(--accent); border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; background: var(--panel); }
+.light-panel input[type='range'] { width: 110px; }

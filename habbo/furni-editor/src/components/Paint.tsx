@@ -3,11 +3,11 @@ import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { CastDocument as CastDocumentClass } from '../wasm';
 import type { Furni } from '../furni';
 import {
-  BUILTIN_PALETTES, XP_COLORS, clone, ellipse, flip, floodFill, fromHex, fromRgbBytes, getPixel, greyRamp, hex, line, nearestIndex,
+  BUILTIN_PALETTES, XP_COLORS, blur, clone, ellipse, flip, floodFill, lightRamp, radialGradient, fromHex, fromRgbBytes, getPixel, greyRamp, hex, line, nearestIndex,
   paletteFromColors, rect, remap, resize, spray, stamp, toIndexed, toRgba, toRgbaImage, toRgbBytes, type Ink, type PaintImage, type ShapeFill,
 } from '../paint';
 
-type Tool = 'pencil' | 'brush' | 'eraser' | 'fill' | 'picker' | 'zoom' | 'airbrush' | 'line' | 'rect' | 'ellipse' | 'reg';
+type Tool = 'pencil' | 'brush' | 'eraser' | 'fill' | 'picker' | 'zoom' | 'airbrush' | 'line' | 'rect' | 'ellipse' | 'gradient' | 'reg';
 
 const TOOLS: { id: Tool; icon: string; name: string; key: string }[] = [
   { id: 'reg', icon: '✛', name: 'Registration point (drag)', key: 'g' },
@@ -21,6 +21,7 @@ const TOOLS: { id: Tool; icon: string; name: string; key: string }[] = [
   { id: 'line', icon: '╲', name: 'Line (Shift: 45°)', key: 'l' },
   { id: 'rect', icon: '▭', name: 'Rectangle (Shift: square)', key: 'r' },
   { id: 'ellipse', icon: '◯', name: 'Ellipse (Shift: circle)', key: 'o' },
+  { id: 'gradient', icon: '◉', name: 'Radial gradient: drag from the centre, primary fading to secondary (Shift: circle). For glows: bright on black', key: 'd' },
 ];
 
 interface Snapshot {
@@ -230,6 +231,13 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
         line(d.work, d.x0, d.y0, p.x, p.y, c, size);
         break;
       }
+      case 'gradient': {
+        let rx = Math.abs(x - d.x0), ry = Math.abs(y - d.y0);
+        if (shift) rx = ry = Math.max(rx, ry);
+        d.work = clone(d.base);
+        radialGradient(d.work, d.x0, d.y0, rx, ry, inkFor(d.button), other, cur.palette);
+        break;
+      }
       case 'rect':
       case 'ellipse': {
         const p = constrain(d.x0, d.y0, x, y, shift, tool);
@@ -324,7 +332,11 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
   };
   const newPalette = (kind: string) => {
     if (!kind) return;
-    const base = kind === 'copy' ? cur.palette : kind === 'ramp' ? greyRamp() : paletteFromColors([toRgba(cur.img, cur.palette, false) as unknown as Uint8Array]);
+    const base =
+      kind === 'copy' ? cur.palette
+      : kind === 'ramp' ? greyRamp()
+      : kind === 'light' ? lightRamp(0xffd060)
+      : paletteFromColors([toRgba(cur.img, cur.palette, false) as unknown as Uint8Array]);
     const name = prompt('Name of the new palette', `${member.name.split('_')[0]} palette`);
     if (!name) return;
     let id = 0;
@@ -333,7 +345,7 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
     });
     if (!id) return;
     if (cur.img.kind === 'indexed') {
-      const img = kind === 'copy' ? cur.img : remap(cur.img, cur.palette, base);
+      const img = kind === 'copy' || kind === 'light' ? cur.img : remap(cur.img, cur.palette, base);
       commit({ img, paletteId: id, palette: base }, `${member.name} on ${name}`);
     } else {
       commit({ img: toIndexed(cur.img.px, cur.img.w, cur.img.h, base), paletteId: id, palette: base }, `${member.name} as 8-bit on ${name}`);
@@ -401,6 +413,10 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
         <button onClick={redo} disabled={!future.current.length} title="Ctrl/Cmd+Y">↷ Redo</button>
         <button onClick={() => commit({ img: flip(cur.img, true), regX: cur.img.w - cur.regX }, 'Flipped horizontally')}>⇋ Flip</button>
         <button onClick={() => commit({ img: flip(cur.img, false), regY: cur.img.h - cur.regY }, 'Flipped vertically')}>⇵ Flip</button>
+        <select value="" onChange={(e) => e.target.value && commit({ img: blur(cur.img, +e.target.value, cur.palette) }, `Blurred ${member.name}`)} title="Soften the picture (a glow: draw a bright shape on black, then blur it)">
+          <option value="">Blur…</option>
+          {[1, 2, 3, 5, 8].map((r) => <option key={r} value={r}>radius {r}</option>)}
+        </select>
         <button onClick={() => setResizeOpen(!resizeOpen)}>Canvas size…</button>
         <button className="primary" onClick={onClose} title="Esc">Done</button>
       </div>
@@ -488,7 +504,13 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
               <option value="copy">a copy of this one</option>
               <option value="picture">from this picture's colours</option>
               <option value="ramp">grey ramp (for tinted, ink 41 layers)</option>
+              <option value="light">light ramp (black to yellow, for ink 33 glows)</option>
             </select>
+            {cur.paletteId > 0 && cur.palette[0] === 0xffffff && cur.palette[1] === 0 && (
+              <label title="This palette is a light ramp (index = brightness, black to a colour): pick the light's colour to make the ramp again in it">
+                light colour <input type="color" value={hex(cur.palette[255] ?? 0)} onChange={(e) => commit({ palette: lightRamp(fromHex(e.target.value)) }, `Light colour ${e.target.value}`)} />
+              </label>
+            )}
             {cur.paletteId > 0 ? <span className="muted small">used by {usedBy} bitmap{usedBy === 1 ? '' : 's'}: changing a colour changes them all</span> : <span className="muted small">built-in: copy it to change colours</span>}
             <span className="spacer" />
             <button onClick={toThirtyTwo} title="Store the picture as 32-bit colours with alpha (no palette)">Make 32-bit</button>

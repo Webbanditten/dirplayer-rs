@@ -62,8 +62,8 @@ indices for an 8-bit member, colours with alpha for a 32-bit one. The room previ
 stroke.
 
 - Tools like Windows XP Paint: pencil, brush, eraser (index 0 / transparent), fill, colour picker, magnifier, airbrush,
-  line (Shift: 45°), rectangle and ellipse (outline, outline + fill, fill; Shift: square/circle), and a registration
-  point tool. Left button = primary colour, right button = secondary. Letters pick tools (P, B, E, F, K, Z, A, L, R, O,
+  line (Shift: 45°), rectangle and ellipse (outline, outline + fill, fill; Shift: square/circle), a radial gradient, and
+  a registration point tool; Blur (radius 1 to 8). Left button = primary colour, right button = secondary. Letters pick tools (P, B, E, F, K, Z, A, L, R, O,
   G), Ctrl/Cmd+Z / Y undo and redo, Esc closes.
 - Colour box: the member's palette (256 swatches; double-click one to change that palette colour; a built-in palette has
   to be copied first) or, for 32-bit, XP's colours, transparent and a custom colour.
@@ -76,6 +76,30 @@ stroke.
 A new palette member is written the way Director writes them (a named `CASt` of type 4 without specific data, and a
 256-entry `CLUT`). Checked in the web client: chair_norja's seat moved onto a new palette with a changed entry draws the
 same as in the preview.
+
+## Lights (the glow of the dragon lamp and the HC lamps)
+
+Sulake's lamps have no blur: the glow is an extra layer drawn with **ink 33 (Add Pin)**, which adds its colours to what
+is under it. Its picture is black (adds nothing) with a soft bright spot (adds light), so it lights up the furni, the
+floor and the wall behind; `#transparent: 1` lets clicks through. rare_dragonlamp's layer g is a yellow halo, hc2_biglamp's
+layer c a large teal pool of light on the floor, hc_lmp's layer c a warm glow (on white, the background colour the ink
+drops). A lamp shows it only when on: in `.data` the layer's frame is 0 (a 1x1 "nothing") off and 1 on; a flickering
+flame is another layer with a blend and a looping frame list.
+
+**Add light…** (in the furni grid) makes such a layer: a halo around a point or a floor light (a flattened pool on the
+furni's tiles, drawn below the furni and above its shadow), its colour, strength, radius and centre (relative to the
+tile point), always or in one state (a furni without `.data` gets one with "off" and "on"; the hotel only switches it
+when the furni's definition can be turned on and off). It writes:
+
+- the picture, 8-bit on a new light palette: index 1 black up to index 255 at the light's colour, so index = brightness;
+- `.props` `#ink: 33, #transparent: 1` (+ `#zshift: [-1000]` for a floor light), `.data` the frames per state;
+- memberalias.index names for the furni's other directions (mirrored where the furni is, which mirrors the light around
+  the tile with it).
+
+Then in Paint: **light colour** (on a light palette) makes the ramp again in another colour; the **radial gradient** tool
+(drag from the centre, primary to secondary) paints more glow; **Blur** softens any picture (draw a bright shape on black
+and blur it). A light only adds brightness, so it nearly vanishes over the preview's transparent background: untick
+"transparent" to see it against a colour.
 
 ## Flash furni
 

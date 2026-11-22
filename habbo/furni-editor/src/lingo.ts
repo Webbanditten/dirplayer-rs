@@ -137,3 +137,37 @@ export function prop(v: LingoValue, key: string): LingoValue {
 export function numberList(v: LingoValue): number[] | undefined {
   return Array.isArray(v) ? v.map((x) => (typeof x === 'number' ? x : Number(x) || 0)) : undefined;
 }
+
+/** Lingo text for a value. `keys`: how property list keys are written: bare words (`frames:`, as in .data), symbols
+ *  (`#ink:`) or strings (`"a":`). */
+export function toLingo(v: LingoValue, keys: (depth: number) => 'bare' | 'symbol' | 'string' = () => 'bare', depth = 0): string {
+  if (v === undefined) return 'VOID';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map((x) => toLingo(x, keys, depth + 1)).join(', ')}]`;
+  if (v instanceof Map) {
+    if (v.size === 0) return '[:]';
+    const style = keys(depth);
+    const key = (k: string) => (style === 'symbol' ? '#' + k : style === 'string' ? JSON.stringify(k) : k);
+    return `[${[...v].map(([k, x]) => `${key(k)}: ${toLingo(x, keys, depth + 1)}`).join(', ')}]`;
+  }
+  return `point(${v.point[0]}, ${v.point[1]})`;
+}
+
+/** A furni's .props text: `["a": [#ink: 33, ...], ...]`. */
+export function propsText(props: Map<string, LingoValue>): string {
+  return toLingo(props, (d) => (d === 0 ? 'string' : 'symbol'));
+}
+
+/** A furni's .data text, laid out like Sulake's: one line per top-level property and per layer. */
+export function dataText(data: Map<string, LingoValue>): string {
+  const lines: string[] = [];
+  for (const [k, v] of data) {
+    if (k.toLowerCase() === 'layers' && v instanceof Map) {
+      lines.push(`layers:[ \n${[...v].map(([l, s]) => `${l}:${toLingo(s)}`).join(',\n')}\n]`);
+    } else {
+      lines.push(`${k}:${toLingo(v)}`);
+    }
+  }
+  return `[\n${lines.join(',\n')}\n]`;
+}

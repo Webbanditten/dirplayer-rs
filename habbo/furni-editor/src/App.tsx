@@ -6,6 +6,7 @@ import { FurniGrid, gridModel } from './components/FurniGrid';
 import { Inspector, type ImportMode } from './components/Inspector';
 import { Preview } from './components/Preview';
 import { Paint } from './components/Paint';
+import { LightPanel } from './components/LightPanel';
 
 const DEFAULT_HOST = 'https://images.habbo-danmark.com/hof_furni/';
 const IMAGE_TYPES = 'image/png,image/gif,image/jpeg';
@@ -35,6 +36,7 @@ export function App() {
   const [status, setStatus] = useState('');
   const [tab, setTab] = useState<'furni' | 'members'>('furni');
   const [painting, setPainting] = useState<number | null>(null);
+  const [lighting, setLighting] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>('auto');
   const [host, setHost] = useState(() => stored('furniEditor.host', DEFAULT_HOST));
   const [className, setClassName] = useState(() => stored('furniEditor.class', 'chair_norja'));
@@ -370,8 +372,9 @@ export function App() {
               <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')}>Furni</button>
               <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')}>All members ({furni.members.length})</button>
             </div>
+            {lighting && <LightPanel doc={doc} furni={furni} edit={edit} setStatus={setStatus} onClose={() => setLighting(false)} />}
             {tab === 'furni' ? (
-              <FurniGrid doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
+              <FurniGrid onAddLight={() => setLighting(true)} doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
             ) : (
               <table className="members">
                 <tbody>

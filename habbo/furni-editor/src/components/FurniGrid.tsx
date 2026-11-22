@@ -84,6 +84,7 @@ interface Props {
   onAddFrame: (letter: string, direction: number, frame: number, file?: File) => void;
   onAddLayer: (letter: string) => void;
   onMirror: () => void;
+  onAddLight?: () => void;
 }
 
 function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc: CastDocument; furni: Furni; cell: Cell; rev: number; selected: boolean; onSelect: () => void; onPaint?: (slot: number) => void }) {
@@ -99,7 +100,7 @@ function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc:
   );
 }
 
-export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror }: Props) {
+export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror, onAddLight }: Props) {
   const g = gridModel(furni, small);
   const dirsUsed = [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
   const nextLetter = String.fromCharCode(97 + g.rows.length);
@@ -108,6 +109,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
       <div className="grid-head">
         <b>{g.cls || '(no class)'}</b> <span className="muted">{g.dims[0]}×{g.dims[1]} tiles</span>
         <span className="spacer" />
+        {onAddLight && <button onClick={onAddLight} title="Add a glow layer (ink 33), like the dragon lamp's halo or the HC lamp's floor light">Add light…</button>}
         <button onClick={onMirror} title="Add memberalias.index lines so directions 4 and 6 show 2 and 0 mirrored, where they have no members of their own">
           Mirror 2→4, 0→6
         </button>

@@ -310,3 +310,108 @@ export const fromRgbBytes = (rgb: Uint8Array) => {
   for (let i = 0; i + 2 < rgb.length; i += 3) out.push((rgb[i] << 16) | (rgb[i + 1] << 8) | rgb[i + 2]);
   return out;
 };
+
+const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
+
+/** How strong a light is at relative distance t (0 centre, 1 edge): a smooth falloff, like Habbo's glow layers. */
+export function falloff(t: number): number {
+  if (t >= 1) return 0;
+  const s = 1 - t;
+  return s * s * (3 - 2 * s);
+}
+
+/**
+ * A radial gradient inside the ellipse at (cx, cy) with radii rx, ry: `inner` in the middle to `outer` at the edge
+ * (smooth falloff). Indexed pictures take the nearest palette colour (a ramp palette makes this exact).
+ */
+export function radialGradient(img: PaintImage, cx: number, cy: number, rx: number, ry: number, inner: Ink, outer: Ink, palette: number[]) {
+  rx = Math.max(1, rx);
+  ry = Math.max(1, ry);
+  const rgb = (c: Ink) => (img.kind === 'indexed' ? (palette[c] ?? 0) | 0xff000000 : c);
+  const a = rgb(inner), b = rgb(outer);
+  const cache = new Map<number, number>();
+  for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
+    for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
+      const t = Math.hypot((x - cx) / rx, (y - cy) / ry);
+      if (t > 1) continue;
+      const k = falloff(t);
+      const c =
+        ((mix((b >>> 24) & 255, (a >>> 24) & 255, k) << 24) |
+          (mix((b >> 16) & 255, (a >> 16) & 255, k) << 16) |
+          (mix((b >> 8) & 255, (a >> 8) & 255, k) << 8) |
+          mix(b & 255, a & 255, k)) >>> 0;
+      if (img.kind === 'indexed') {
+        let v = cache.get(c);
+        if (v === undefined) cache.set(c, (v = nearestIndex(palette, c & 0xffffff)));
+        setPixel(img, x, y, v);
+      } else {
+        setPixel(img, x, y, c);
+      }
+    }
+  }
+}
+
+/** A box blur run three times (close to a gaussian) on the colours (and alpha); indexed pictures map back to the
+ *  nearest palette colours. */
+export function blur(img: PaintImage, radius: number, palette: number[]): PaintImage {
+  const { w, h } = img;
+  const ch = img.kind === 'rgba' ? 4 : 3;
+  let buf = new Float32Array(w * h * ch);
+  for (let i = 0; i < w * h; i++) {
+    if (img.kind === 'rgba') for (let k = 0; k < 4; k++) buf[i * 4 + k] = img.px[i * 4 + k];
+    else {
+      const c = palette[img.px[i]] ?? 0;
+      buf[i * 3] = (c >> 16) & 255;
+      buf[i * 3 + 1] = (c >> 8) & 255;
+      buf[i * 3 + 2] = c & 255;
+    }
+  }
+  const pass = (src: Float32Array, horizontal: boolean) => {
+    const out = new Float32Array(src.length);
+    const [n, m] = horizontal ? [h, w] : [w, h];
+    for (let line = 0; line < n; line++) {
+      for (let k = 0; k < ch; k++) {
+        let sum = 0, count = 0;
+        const at = (p: number) => ((horizontal ? line * w + p : p * w + line) * ch + k);
+        for (let p = -radius; p <= radius; p++) if (p >= 0 && p < m) { sum += src[at(p)]; count++; }
+        for (let p = 0; p < m; p++) {
+          out[at(p)] = sum / count;
+          const add = p + radius + 1, drop = p - radius;
+          if (add < m) { sum += src[at(add)]; count++; }
+          if (drop >= 0) { sum -= src[at(drop)]; count--; }
+        }
+      }
+    }
+    return out;
+  };
+  for (let i = 0; i < 3; i++) buf = pass(pass(buf, true), false);
+  const out = clone(img);
+  const cache = new Map<number, number>();
+  for (let i = 0; i < w * h; i++) {
+    const r = Math.round(buf[i * ch]), g = Math.round(buf[i * ch + 1]), b = Math.round(buf[i * ch + 2]);
+    if (img.kind === 'rgba') {
+      out.px.set([r, g, b, Math.round(buf[i * 4 + 3])], i * 4);
+    } else {
+      const c = (r << 16) | (g << 8) | b;
+      let v = cache.get(c);
+      if (v === undefined) cache.set(c, (v = nearestIndex(palette, c)));
+      out.px[i] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * A light palette for an ink 33 (Add Pin) layer: index 0 white (the background colour the ink drops), 1 black (adds
+ * nothing), then 254 steps up to the light's colour at `strength`. Index = brightness, so recolouring the light is
+ * one new ramp.
+ */
+export function lightRamp(color: number, strength = 1): number[] {
+  const r = ((color >> 16) & 255) * strength, g = ((color >> 8) & 255) * strength, b = (color & 255) * strength;
+  const out = [0xffffff];
+  for (let i = 0; i < 255; i++) {
+    const t = i / 254;
+    out.push((Math.round(r * t) << 16) | (Math.round(g * t) << 8) | Math.round(b * t));
+  }
+  return out;
+}
