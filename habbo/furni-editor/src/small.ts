@@ -3,7 +3,8 @@
  * like the large one with `s_` in front: members `s_<class>_<layer>_0_<l>_<w>_<dir>_<frame>`, `s_<class>.props`,
  * `s_<class>.data`, `s_` palettes, memberalias.index with `s_` names; the icons (`<class>_small...`) are in both, at
  * the same size. A furni without one gets it made from the large cast: pictures halved (paint.ts `halve`),
- * registration points and locshift points halved, names prefixed.
+ * registration points and locshift points halved, names prefixed. A wall item's `leftwall <class>_...` /
+ * `rightwall <class>_...` become `s_leftwall <class>_...` (as the hotel's hh_furni_xx_s_arabian_swords.cct has them).
  */
 import { CastDocument } from './wasm';
 import { ALIAS_INDEX, ASSET_INDEX, type Member } from './furni';
@@ -19,7 +20,7 @@ export const isSmallFile = (name: string) => /^hh_furni_xx_s_/i.test(name);
 export function makeSmall(large: CastDocument, cls: string): CastDocument {
   const doc = new CastDocument(large.save());
   const members: Member[] = JSON.parse(doc.membersJson());
-  const own = new RegExp(`^${esc(cls)}(?=[_.]|$)`, 'i');
+  const own = new RegExp(`^(?:(?:left|right)wall )?${esc(cls)}(?=[_.]|$)`, 'i');
   const icon = new RegExp(`^${esc(cls)}_small(_[a-z])?$`, 'i');
   const rename = (name: string) => (own.test(name) && !icon.test(name) ? 's_' + name : name);
   const paletteOf = (m: Member) => {

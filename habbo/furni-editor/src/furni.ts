@@ -13,6 +13,11 @@
  * - Layer i is tinted with part colour i (items_definitions.colour: "#RRGGBB" or a palette index): the bgColor.
  * - The shadow `<class>_sd[_<direction>]` sits below everything at blend 20.
  * - 1x1 members are "nothing in this frame" placeholders.
+ *
+ * Wall items ("Item Object Extension Class", the hotel's arabian_swords, exe_map, hc_wall_lamp...): `leftwall <class>`
+ * or, with `<class>.data` layers, `leftwall <class>_<layer>_<frame>` (`rightwall` for the right wall, `s_leftwall` in
+ * the 32 px cast). Direction 2 is the left wall, 4 the right one; the registration point is the wall point the item
+ * hangs from; a mirrored alias turns the sprite around that point (rotation and skew 180) without moving it.
  */
 import type { CastDocument } from '../../../vm-rust/pkg/vm_rust.js';
 import { lingoValue, numberList, prop, type LingoValue } from './lingo';
@@ -365,10 +370,90 @@ export function floorSetup(furni: Furni, options: FloorOptions): FloorSetup | nu
   return { cls, props, data, direction, dims, letters: slots.map((s) => s.letter), layersAt };
 }
 
+const WALL_RE = /^(?:s_)?(left|right)wall (.+?)(?:_[a-z]_\d+)?$/;
+const wallOf = (direction: number) => (direction === 4 ? 'rightwall' : 'leftwall');
+
+/** A wall item: asset.index names an Item Object class, or the furni has leftwall / rightwall members of its own. */
+export function isWallItem(furni: Furni): boolean {
+  if (furni.classes().some((c) => /^item object/i.test(c))) return true;
+  const cls = furni.className().toLowerCase();
+  if (!cls) return false;
+  for (const n of furni.names.keys()) if (WALL_RE.exec(n)?.[2] === cls) return true;
+  return false;
+}
+
+/** A wall item's layers on the wanted wall (direction 4 = right wall, anything else the left one; a wall it has no
+ *  members for falls back to the other), in the same shape as floorSetup's so the room draws both alike. */
+export function wallSetup(furni: Furni, options: FloorOptions): FloorSetup | null {
+  const small = options.small ?? furni.isSmallCast();
+  const cls = furni.className();
+  if (!cls) return null;
+  const pre = small ? 's_' : '';
+  const base = pre + cls;
+  const props = lingoValue(furni.text(base + '.props') ?? '[:]');
+  const data = lingoValue((furni.text(base + '.data') ?? '').replace(/[\r\n]/g, ''));
+  const layerList = prop(data, 'layers');
+  const hasLayers = layerList instanceof Map && layerList.size > 0;
+  const letters = hasLayers ? [...(layerList as Map<string, LingoValue>).keys()] : ['a'];
+  const memberFor = (wall: string, letter: string, frame?: number) =>
+    furni.bitmap(hasLayers ? `${pre}${wall} ${cls}_${letter}_${frame ?? frameFor(data, letter, options.state)}` : `${pre}${wall} ${cls}`);
+  const wanted = options.direction === 4 ? 4 : 2;
+  const direction = [wanted, 6 - wanted].find((d) => memberFor(wallOf(d), letters[0]));
+  if (direction === undefined) return null;
+  const wall = wallOf(direction);
+  const colors = parseColors(options.colors);
+  const layersAt = (choice?: FrameChoice): Layer[] => {
+    const layers: Layer[] = [];
+    letters.forEach((letter, i) => {
+      const chosen = hasLayers ? choice?.(letter) : undefined;
+      const found = memberFor(wall, letter, chosen?.frame);
+      const b = found?.member.bitmap;
+      if (!found || !b || (b.width <= 1 && b.height <= 1)) return;
+      const lp = prop(props, letter);
+      const zshift = numberList(prop(lp, 'zshift'));
+      const shift = prop(lp, 'locshift');
+      const shiftValue = Array.isArray(shift) ? shift[0] : shift;
+      const point = typeof shiftValue === 'string' ? lingoValue(shiftValue) : shiftValue;
+      const [sx, sy] = point && typeof point === 'object' && 'point' in point ? point.point : [0, 0];
+      layers.push({
+        name: found.member.name,
+        letter,
+        slot: found.slot,
+        flip: found.flip,
+        ink: Number(prop(lp, 'ink') ?? 8),
+        blend: chosen?.blend ?? Number(prop(lp, 'blend') ?? 100),
+        bgColor: partColor(colors[i], furni.paletteColors(b.paletteId)),
+        z: (zshift ? zshift[0] : 0) + i,
+        order: i,
+        shiftX: sx,
+        shiftY: sy,
+        xFactor: 0,
+        width: b.width,
+        height: b.height,
+        regX: b.regX,
+        regY: b.regY,
+      });
+    });
+    return layers.sort((a, b) => a.z - b.z || a.order - b.order);
+  };
+  return { cls: base, props, data, direction, dims: [1, 1], letters, layersAt };
+}
+
+/** floorSetup or wallSetup, whichever the furni is. */
+export function furniSetup(furni: Furni, options: FloorOptions): FloorSetup | null {
+  return isWallItem(furni) ? wallSetup(furni, options) : floorSetup(furni, options);
+}
+
 /** The directions the furni can be turned to: those with a layer a member or memberalias.index name of their own (the
  *  client's rotate only moves to a direction whose member exists; a direction without one would draw direction 0's
  *  members, which never happens in a room). */
 export function ownDirections(furni: Furni, small = furni.isSmallCast()): number[] {
+  if (isWallItem(furni)) {
+    const pre = (small ? 's_' : '') ;
+    const cls = furni.className().toLowerCase();
+    const has = (wall: string) => [...furni.names.keys()].some((n) => n === `${pre}${wall} ${cls}` || n.startsWith(`${pre}${wall} ${cls}_`));
+    return [2, 4].filter((d) => has(wallOf(d)));
+  }
   const cls = (small ? 's_' : '') + furni.className();
   const out = new Set<number>();
   const prefix = `${cls}_a_0_`.toLowerCase();

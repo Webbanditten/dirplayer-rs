@@ -20,6 +20,14 @@
  * - `<colors>` -> items_definitions.colour strings ("#RRGGBB" per layer, "#FFFFFF" where a layer has none).
  * - Every layer and direction gets a frame 0 (a 1x1 placeholder if the Flash file has none), which the client's layer
  *   detection needs.
+ * - Icons keep the asset's offsets as their registration point (the hotel's `chair_norja_small` 11,7 = Flash 11,7).
+ *
+ * Wall items (a wall-thin logic depth, y < 1, and only directions 2 and 4; or `kind: 'wall'`) follow the client's
+ * "Item Object Extension Class" instead, as the hotel's own wall items do (arabian_swords, exe_map, wallmirror):
+ * `<sprite>_64_<layer>_2_<frame>` -> `leftwall <sprite>_<layer>_<frame>`, direction 4 -> `rightwall ...`, 32 px
+ * `s_leftwall ...`; the registration point is the asset's offset itself; a flipped source becomes
+ * `rightwall x=leftwall x*`; `<sprite>.data` is always written (the class builds the member names from its frame
+ * lists, `frames:[0]` for a still layer); asset.index names Item Object Class and Item Object Extension Class.
  */
 import { ALIAS_INDEX } from './furni';
 import type { CastDocument, SwfDocument } from '../../../vm-rust/pkg/vm_rust.js';
@@ -53,6 +61,8 @@ export interface PlannedBitmap {
 
 export interface FlashPlan {
   sprite: string;
+  /** a wall item (leftwall / rightwall members) instead of floor furni */
+  wall: boolean;
   dims: [number, number];
   bitmaps: PlannedBitmap[];
   fields: { name: string; text: string }[];
@@ -64,6 +74,15 @@ export interface FlashPlan {
 export interface FlashOptions {
   /** also convert the 32 px pictures (s_ members) */
   small: boolean;
+  /** floor furni or a wall item; 'auto' (the default) decides from the logic depth and the directions */
+  kind?: 'auto' | 'floor' | 'wall';
+}
+
+/** Whether a Flash furni is a wall item: wall-thin (logic depth y < 1) and drawn only for directions 2 and 4 (left and
+ *  right wall). Checked on prod's 2,656 Flash furni: 113 of the hotel's 120 wall items, none of its 801 floor furni (the
+ *  7 missed are 1 deep: import those with kind 'wall'). */
+export function looksLikeWallItem(dims: [number, number], directions: number[]): boolean {
+  return dims[1] < 1 && directions.length > 0 && directions.every((d) => d === 2 || d === 4);
 }
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
@@ -101,6 +120,10 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     fileName.replace(/\.swf$/i, '');
   const dimsEl = logicXml?.querySelector('model > dimensions');
   const dims: [number, number] = [num(dimsEl, 'x') ?? 1, num(dimsEl, 'y') ?? 1];
+  const vis64 = visXml.querySelector('visualization[size="64"]');
+  const visDirections = vis64 ? [...new Set(Array.from(vis64.querySelectorAll('directions > direction')).map((d) => num(d, 'id') ?? -1))] : [];
+  const wall = options.kind === 'wall' || (options.kind !== 'floor' && looksLikeWallItem(dims, visDirections));
+  const wallName = (dir: number) => (dir === 4 ? 'rightwall' : 'leftwall');
 
   // Pictures by asset name: their exported class is "<library>_<asset name>"; the library is usually the sprite.
   const images = new Map<string, SwfSummary['images'][number]>();
@@ -141,10 +164,13 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
   const shockwaveName = (p: Parsed) => {
     const pre = p.size === 32 ? 's_' : '';
     if (p.kind === 'icon') return p.letter === 'a' ? `${sprite}_small` : `${sprite}_small_${p.letter}`;
+    if (wall) return p.kind === 'shadow' ? null : `${pre}${wallName(p.dir)} ${sprite}_${p.letter}_${p.frame}`;
     if (p.kind === 'shadow') return `${pre}${sprite}_sd_${p.dir}`;
     return `${pre}${sprite}_${p.letter}_0_${dims[0]}_${dims[1]}_${p.dir}_${p.frame}`;
   };
-  const centre = (p: Parsed) => (p.kind === 'icon' ? 32 : p.size === 32 ? 16 : 32);
+  // Floor layers hang from the tile's left corner, half a tile left of the Flash origin; icons and wall items use the
+  // asset's offsets as they are.
+  const centre = (p: Parsed) => (p.kind === 'icon' || wall ? 0 : p.size === 32 ? 16 : 32);
 
   // The picture an asset shows: its own, or its source's (following source chains). Only the asset's own flipH counts:
   // a source's flag is about how the source itself is shown.
@@ -167,13 +193,21 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
   const storedFlipped = new Set<string>();
   const wanted = [...assets.values()].filter((a) => {
     const p = parse(a.name);
+    if (p && wall && p.kind !== 'icon' && p.dir !== 2 && p.dir !== 4) {
+      warnings.push(`${a.name}: a wall item has only directions 2 (left wall) and 4 (right wall)`);
+      return false;
+    }
+    if (p && wall && p.kind === 'shadow') {
+      warnings.push(`${a.name}: wall items have no shadow`);
+      return false;
+    }
     return p && (p.size === 64 || options.small);
   });
   // Pictures first (members), then the assets that reuse them.
   const ordered = [...wanted.filter((a) => images.has(a.name)), ...wanted.filter((a) => !images.has(a.name))];
   for (const a of ordered) {
     const p = parse(a.name)!;
-    const name = shockwaveName(p);
+    const name = shockwaveName(p)!;
     const own = owner(a);
     if (!own) {
       warnings.push(`${a.name}: no picture`);
@@ -183,7 +217,7 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     const flip = own.flip;
     const c = centre(p);
     const srcParsed = parse(own.asset.name);
-    const srcName = srcParsed ? shockwaveName(srcParsed) : undefined;
+    const srcName = srcParsed ? shockwaveName(srcParsed) ?? undefined : undefined;
     const sameOffsets = own.asset.x === a.x && own.asset.y === a.y;
     if (own.asset !== a && srcName && memberNames.has(srcName) && sameOffsets && p.kind !== 'icon') {
       // The alias mirrors relative to the member as stored.
@@ -204,9 +238,10 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     if (flip) storedFlipped.add(name);
   }
 
-  // Every layer and direction needs a frame 0 (Active Object Class takes base layers from frame 0).
+  // Every layer and direction needs a frame 0 (Active Object Class takes base layers from frame 0). Wall items don't:
+  // Item Object Extension Class names each member from its .data frame list.
   const groups = new Map<string, Set<number>>();
-  for (const n of [...memberNames, ...aliases.map((l) => l.split('=')[0])]) {
+  for (const n of wall ? [] : [...memberNames, ...aliases.map((l) => l.split('=')[0])]) {
     const m = /^(.*_[a-z]_0_\d+_\d+_\d+)_(\d+)$/.exec(n);
     if (!m) continue;
     if (!groups.has(m[1])) groups.set(m[1], new Set());
@@ -227,7 +262,7 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     const pre = size === 32 ? 's_' : '';
     const layerCount = num(vis, 'layerCount') ?? 0;
     const usedLetters = [...new Set([...memberNames, ...aliases.map((l) => l.split('=')[0])].map((n) => {
-      const m = new RegExp(`^${pre}${escape(sprite)}_([a-z])_0_`).exec(n);
+      const m = wall ? new RegExp(`^${pre}(?:left|right)wall ${escape(sprite)}_([a-z])_\\d+$`).exec(n) : new RegExp(`^${pre}${escape(sprite)}_([a-z])_0_`).exec(n);
       return m?.[1];
     }).filter((x): x is string => !!x))].sort();
 
@@ -259,7 +294,11 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
       const alpha = num(layer, 'alpha');
       if (alpha !== undefined && !ink) entries.push(`#blend: ${Math.round((alpha / 255) * 100)}`);
       const perDir = Array.from(vis.querySelectorAll(`directions > direction > layer[id="${id}"]`));
-      if (perDir.length) {
+      if (wall) {
+        // one locZ for both walls (Item Object Extension Class takes the first entry): direction 2's, else the layer's
+        const z = num(vis.querySelector(`directions > direction[id="2"] > layer[id="${id}"]`), 'z') ?? num(layer, 'z');
+        if (z !== undefined) entries.push(`#zshift: [${z}]`);
+      } else if (perDir.length) {
         const z = [0, 0, 0, 0, 0, 0, 0, 0];
         for (const dl of perDir) {
           const d = num(dl.parentElement, 'id') ?? 0;
@@ -283,8 +322,8 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
         if (a.id >= 100) warnings.push(`Animation ${a.id} (a transition) left out`);
         return a.id < 100;
       });
-    if (anims.length) {
-      const states = Math.max(...anims.map((a) => a.id)) + 1;
+    if (anims.length || (wall && usedLetters.length)) {
+      const states = anims.length ? Math.max(...anims.map((a) => a.id)) + 1 : 1;
       const lines: string[] = [];
       for (const letter of usedLetters) {
         const id = LETTERS.indexOf(letter);
@@ -309,9 +348,10 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     }
   }
 
-  fields.push({ name: 'asset.index', text: `[#id: "${sprite}", #classes: ["Active Object Class",  "Active Object Extension Class"]]` });
+  const classes = wall ? '"Item Object Class", "Item Object Extension Class"' : '"Active Object Class",  "Active Object Extension Class"';
+  fields.push({ name: 'asset.index', text: `[#id: "${sprite}", #classes: [${classes}]]` });
   if (aliases.length) fields.push({ name: 'memberalias.index', text: aliases.join('\n') });
-  return { sprite, dims, bitmaps, fields, colors, warnings };
+  return { sprite, wall, dims, bitmaps, fields, colors, warnings };
 }
 
 function escape(s: string) {

@@ -5,6 +5,10 @@
  * Geometry is the client's (hh_room "Room Geometry Class"): tile (x, y) has the screen location
  * ((x - y) * 32 + xOffset, (x + y) * 16 + yOffset), which is the tile's left corner at its vertical centre (the
  * 64 x 32 diamond spans locH .. locH + 64 and locV - 16 .. locV + 16). A furni's sprites are placed from that point.
+ *
+ * For wall items the room gets its two back walls (`wallHeight`): the left wall stands on the back-left edges of the
+ * x = 0 tiles, the right wall on the back-right edges of the y = 0 tiles, and a wall item hangs from a point on one of
+ * them (its registration point is where the client puts the item on the wall).
  */
 import type { CastDocument } from '../../../vm-rust/pkg/vm_rust.js';
 import { spriteRect, type Layer } from './furni';
@@ -17,6 +21,8 @@ export interface RoomSize {
 export interface RoomLayout extends RoomSize {
   /** tile width: 64, or 32 for the small room zoom (s_ members) */
   tile: number;
+  /** height of the back walls in pixels (0: no walls) */
+  wallHeight: number;
   width: number;
   height: number;
   xOffset: number;
@@ -26,20 +32,37 @@ export interface RoomLayout extends RoomSize {
 const HEADROOM = 24;
 const THICKNESS = 8;
 
-export function roomLayout(size: RoomSize, tile = 64): RoomLayout {
+export function roomLayout(size: RoomSize, tile = 64, wallHeight = 0): RoomLayout {
   const margin = 24, hw = tile / 2, hh = tile / 4;
   const xOffset = margin + (size.rows - 1) * hw;
-  const yOffset = HEADROOM + hh;
+  const yOffset = HEADROOM + hh + wallHeight;
   const width = xOffset + (size.cols - 1) * hw + tile + margin;
   const height = yOffset + (size.cols + size.rows - 2) * hh + hh + (THICKNESS * tile) / 64 + margin;
-  return { ...size, tile, width, height, xOffset, yOffset };
+  return { ...size, tile, wallHeight, width, height, xOffset, yOffset };
+}
+
+/** The point a wall item hangs from: on the left wall (direction 2) or the right wall (4), in the middle of the wall,
+ *  `drop` pixels below its top. */
+export function wallAnchor(room: RoomLayout, direction: number, drop: number) {
+  const hw = room.tile / 2, hh = room.tile / 4;
+  if (direction === 4) {
+    const { locH, locV } = tileLoc(room, Math.floor((room.cols - 1) / 2), 0);
+    return { locH: locH + hw + hw / 2, locV: locV - hh / 2 - room.wallHeight + drop };
+  }
+  const { locH, locV } = tileLoc(room, 0, Math.floor((room.rows - 1) / 2));
+  return { locH: locH + hw / 2, locV: locV - hh / 2 - room.wallHeight + drop };
+}
+
+/** Where a placement's sprites hang from: its wall point, or its tile. */
+export function placementLoc(room: RoomLayout, p: { x: number; y: number; wall?: { direction: number; drop: number } }) {
+  return p.wall ? wallAnchor(room, p.wall.direction, p.wall.drop) : tileLoc(room, p.x, p.y);
 }
 
 /** Grow the canvas so every sprite of `placements` (plus a margin) fits, moving the floor along. */
 export function fitRoom(room: RoomLayout, placements: Placement[], margin = 16): RoomLayout {
   let minL = 0, minT = 0, maxR = room.width, maxB = room.height;
   for (const p of placements) {
-    const { locH, locV } = tileLoc(room, p.x, p.y);
+    const { locH, locV } = placementLoc(room, p);
     for (const l of p.layers) {
       const r = spriteRect(l, locH, locV);
       minL = Math.min(minL, r.left - margin);
@@ -66,6 +89,8 @@ function shade([r, g, b]: [number, number, number], f: number): [number, number,
 
 export interface FloorStyle {
   floor: string;
+  /** colour of the back walls, when the room has them */
+  wall?: string;
   background: string;
   grid: boolean;
   /** tiles to highlight (a furni's footprint) */
@@ -88,6 +113,27 @@ export function drawFloor(room: RoomLayout, style: FloorStyle): Uint8Array {
   const right = shade(top, 0.7);
   const lit: [number, number, number] = [Math.min(255, top[0] + 40), Math.min(255, top[1] + 40), Math.min(255, top[2] + 40)];
   const T = room.tile, hw = T / 2, hh = T / 4, thick = (THICKNESS * T) / 64;
+  if (room.wallHeight > 0) {
+    // Behind the floor: the left wall on the x = 0 tiles' back-left edges, the right wall on the y = 0 tiles' back-right
+    // edges (each edge climbs one pixel every two), wallHeight high.
+    const wallLeft = hex(style.wall ?? '#c6cbd4');
+    const wallRight = shade(wallLeft, 0.82);
+    const topEdge = shade(wallLeft, 0.7);
+    for (let ty = 0; ty < room.rows; ty++) {
+      const { locH, locV } = tileLoc(room, 0, ty);
+      for (let x = locH; x < locH + hw; x++) {
+        const base = locV - Math.floor((x - locH) / 2);
+        for (let y = base - room.wallHeight; y < base; y++) put(x, y, y < base - room.wallHeight + 2 ? topEdge : wallLeft);
+      }
+    }
+    for (let tx = 0; tx < room.cols; tx++) {
+      const { locH, locV } = tileLoc(room, tx, 0);
+      for (let x = locH + hw; x < locH + T; x++) {
+        const base = locV - hh + Math.floor((x - locH - hw) / 2);
+        for (let y = base - room.wallHeight; y < base; y++) put(x, y, y < base - room.wallHeight + 2 ? topEdge : wallRight);
+      }
+    }
+  }
   for (let ty = 0; ty < room.rows; ty++) {
     for (let tx = 0; tx < room.cols; tx++) {
       const { locH, locV } = tileLoc(room, tx, ty);
@@ -121,6 +167,8 @@ export function drawFloor(room: RoomLayout, style: FloorStyle): Uint8Array {
 export interface Placement {
   x: number;
   y: number;
+  /** a wall item: hangs from its wall (direction 2 left, 4 right), `drop` pixels below the wall's top */
+  wall?: { direction: number; drop: number };
   layers: Layer[];
   /** layers to leave out, by letter */
   hidden?: Set<string>;
@@ -137,11 +185,12 @@ export interface SpriteSpec {
 }
 
 export function sprites(room: RoomLayout, placements: Placement[]): SpriteSpec[] {
-  // Furni further back first (the client's locZ is 1000 * (x + y + 1) plus the layer's z).
-  const sorted = [...placements].sort((a, b) => a.x + a.y - (b.x + b.y));
+  // Furni further back first (the client's locZ is 1000 * (x + y + 1) plus the layer's z); wall items behind them all.
+  const key = (p: Placement) => (p.wall ? -1 : p.x + p.y);
+  const sorted = [...placements].sort((a, b) => key(a) - key(b));
   const out: SpriteSpec[] = [];
   for (const p of sorted) {
-    const { locH, locV } = tileLoc(room, p.x, p.y);
+    const { locH, locV } = placementLoc(room, p);
     for (const l of p.layers) {
       if (p.hidden?.has(l.letter)) continue;
       const r = spriteRect(l, locH, locV);

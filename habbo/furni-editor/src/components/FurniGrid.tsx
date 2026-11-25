@@ -1,7 +1,7 @@
 import type React from 'react';
 import { Icon } from './Icon';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
-import { parseMemberName, type Furni, type Member } from '../furni';
+import { isWallItem, parseMemberName, type Furni, type Member } from '../furni';
 import { Thumb } from './Thumb';
 
 export interface Cell {
@@ -19,6 +19,12 @@ export interface LayerRow {
 
 export interface GridModel {
   cls: string;
+  /** the class without s_ */
+  base: string;
+  /** the 32 px zoom's members */
+  smallZoom: boolean;
+  /** a wall item: directions are 2 (left wall) and 4 (right wall), members `leftwall <class>_<layer>_<frame>` */
+  wall: boolean;
   dims: [number, number];
   rows: LayerRow[];
   shadows: Cell[];
@@ -30,8 +36,11 @@ export interface GridModel {
 
 /** The class's bitmaps as layers x directions x frames (own members and memberalias.index names). */
 export function gridModel(furni: Furni, smallZoom = furni.isSmallCast()): GridModel {
-  const cls = (smallZoom ? 's_' : '') + furni.className();
+  const base = furni.className();
+  const cls = (smallZoom ? 's_' : '') + base;
   const lowerCls = cls.toLowerCase();
+  const wall = isWallItem(furni);
+  const wallRe = new RegExp(`^${smallZoom ? 's_' : ''}(left|right)wall ${base.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:_([a-z])_(\\d+))?$`);
   const rows = new Map<string, LayerRow>();
   const shadows: Cell[] = [];
   const icons: Cell[] = [];
@@ -43,7 +52,8 @@ export function gridModel(furni: Furni, smallZoom = furni.isSmallCast()): GridMo
     if (!m || m.type !== 'bitmap') continue;
     const name = display.get(key) ?? key;
     const cell: Cell = { name, slot: e.slot, flip: e.flip, aliasOf: e.aliasOf };
-    const p = parseMemberName(key);
+    const w = wall ? wallRe.exec(key) : null;
+    const p = w ? { cls: lowerCls, letter: w[2] ?? 'a', width: 1, length: 1, direction: w[1] === 'right' ? 4 : 2, frame: Number(w[3] ?? 0) } : parseMemberName(key);
     if (p && p.cls === lowerCls) {
       dims = [p.width, p.length];
       let row = rows.get(p.letter);
@@ -66,6 +76,9 @@ export function gridModel(furni: Furni, smallZoom = furni.isSmallCast()): GridMo
   const other = rest.filter((m) => !m.name.toLowerCase().startsWith(smallPrefix));
   return {
     cls,
+    base,
+    smallZoom,
+    wall,
     dims,
     rows: [...rows.values()].sort((a, b) => a.letter.localeCompare(b.letter)),
     shadows: shadows.sort((a, b) => a.name.localeCompare(b.name)),
@@ -74,6 +87,14 @@ export function gridModel(furni: Furni, smallZoom = furni.isSmallCast()): GridMo
     other,
   };
 }
+
+/** The member name for a layer's frame in a direction (a wall item's 2 = left wall, 4 = right wall). */
+export function memberNameFor(g: GridModel, letter: string, direction: number, frame: number): string {
+  if (g.wall) return `${g.smallZoom ? 's_' : ''}${direction === 4 ? 'rightwall' : 'leftwall'} ${g.base}_${letter}_${frame}`;
+  return `${g.cls}_${letter}_0_${g.dims[0]}_${g.dims[1]}_${direction}_${frame}`;
+}
+
+const dirLabel = (g: GridModel, d: number) => (g.wall ? (d === 4 ? 'right wall' : 'left wall') : `dir ${d}`);
 
 interface Props {
   doc: CastDocument;
@@ -104,17 +125,17 @@ function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc:
 
 export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror, onAddLight }: Props) {
   const g = gridModel(furni, small || furni.isSmallCast());
-  const dirsUsed = [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
+  const dirsUsed = g.wall ? [2, 4] : [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
   const nextLetter = String.fromCharCode(97 + g.rows.length);
   return (
     <div className="grid">
       <div className="grid-head">
         <span className="cls-name">{g.cls || '(no class)'}</span>
-        <span className="dims">{g.dims[0]}×{g.dims[1]} tiles</span>
+        <span className="dims">{g.wall ? 'wall item' : `${g.dims[0]}×${g.dims[1]} tiles`}</span>
         <span className="spacer" />
         {onAddLight && <button onClick={onAddLight} title="Add a glow layer (ink 33), like the dragon lamp's halo or the HC lamp's floor light"><Icon name="sun" size={14} />Light…</button>}
-        <button onClick={onMirror} title="Add memberalias.index lines so directions 4 and 6 show 2 and 0 mirrored, where they have no members of their own">
-          <Icon name="mirror" size={14} />2→4, 0→6
+        <button onClick={onMirror} title={g.wall ? 'Add memberalias.index lines so the right wall shows the left wall\'s members mirrored, where it has none of its own' : 'Add memberalias.index lines so directions 4 and 6 show 2 and 0 mirrored, where they have no members of their own'}>
+          <Icon name="mirror" size={14} />{g.wall ? 'left → right' : '2→4, 0→6'}
         </button>
       </div>
       {g.rows.map((row, i) => (
@@ -127,7 +148,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
               const next = list.length ? list[list.length - 1][0] + 1 : 0;
               return (
                 <div key={d} className="dir-group">
-                  <div className="dir-label">dir {d}</div>
+                  <div className="dir-label">{dirLabel(g, d)}</div>
                   <div className="frames">
                     {list.map(([f, cell]) => (
                       <div key={f} className="frame">
@@ -137,7 +158,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
                     ))}
                     <button
                       className="add"
-                      title={`New frame ${next} for layer ${row.letter}, direction ${d}: click to pick an image, or drop one here`}
+                      title={`New frame ${next} for layer ${row.letter}, ${dirLabel(g, d)}: click to pick an image, or drop one here`}
                       onClick={() => onAddFrame(row.letter, d, next)}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => {

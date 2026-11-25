@@ -460,3 +460,15 @@ label.chip:has(input:focus-visible) { outline: 2px solid var(--ring); outline-of
 .restore-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .restore-text span { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .restore-card { grid-template-columns: auto 1fr; } }
+
+/* the name dialog (rename, copy, copy before publishing) */
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(15, 20, 30, 0.35); }
+.modal { width: min(440px, calc(100vw - 32px)); padding: 18px; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--pop-shadow); }
+.modal h3 { margin: 0; font-size: 15px; }
+.modal p { margin: 0; color: var(--muted); }
+.modal-field { display: flex; flex-direction: column; gap: 4px; }
+.modal-field span { font-size: 12px; color: var(--muted); }
+.modal-field input { width: 100%; font: var(--font-mono); }
+.modal-hint { font-size: 12px; }
+.modal-hint.bad { color: var(--danger); }
+.modal-buttons { display: flex; justify-content: flex-end; gap: 8px; }

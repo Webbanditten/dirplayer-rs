@@ -3,7 +3,7 @@
  * published. The name and content rules are Housekeeping's (OdinCMS FurniCastValidator, which refuses a cast that breaks
  * them); the drawing rules follow the client's furni classes as ported in furni.ts.
  */
-import { ALIAS_INDEX, ASSET_INDEX, floorSetup, layerData, parseMemberName, type Furni } from './furni';
+import { ALIAS_INDEX, ASSET_INDEX, floorSetup, layerData, parseMemberName, wallSetup, type Furni } from './furni';
 import { parseLingo, prop, type LingoValue } from './lingo';
 import { gridModel } from './components/FurniGrid';
 import type { SideKey } from './history';
@@ -198,11 +198,13 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
     return Array.isArray(s) ? s.length : 1;
   })());
   const drawn = new Set<string>();
-  for (const d of dirs) for (let s = 0; s < stateCount; s++) floorSetup(furni, { direction: d, state: s, small, shadow: false })?.letters.forEach((l) => drawn.add(l));
+  for (const d of dirs) for (let s = 0; s < stateCount; s++) (wall ? wallSetup : floorSetup)(furni, { direction: d, state: s, small, shadow: false })?.letters.forEach((l) => drawn.add(l));
   for (const r of g.rows) {
     if (!drawn.has(r.letter)) {
       const first = [...r.dirs.values()][0]?.values().next().value;
-      push('warning', `Layer ${r.letter} is never drawn: the client stops at the first missing layer letter, and .data doesn't list it`, first?.slot);
+      push('warning', wall
+        ? `Layer ${r.letter} is never drawn: a wall item draws only the layers its ${own}.data lists`
+        : `Layer ${r.letter} is never drawn: the client stops at the first missing layer letter, and .data doesn't list it`, first?.slot);
     }
   }
 
@@ -212,7 +214,9 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
     const lacks = aDirs.filter((d) => !r.dirs.has(d));
     if (r.letter !== 'a' && lacks.length && lacks.length < aDirs.length) {
       const first = [...r.dirs.values()][0]?.values().next().value;
-      push('warning', `Layer ${r.letter} has no picture for direction ${lacks.join(', ')} (layer a has): ${r.dirs.has(0) ? 'the client shows its direction 0 picture there' : "it's missing there"}`, first?.slot);
+      push('warning', wall
+        ? `Layer ${r.letter} has no picture for the ${lacks.map((d) => (d === 4 ? 'right' : 'left')).join(' and ')} wall (layer a has): it's missing there`
+        : `Layer ${r.letter} has no picture for direction ${lacks.join(', ')} (layer a has): ${r.dirs.has(0) ? 'the client shows its direction 0 picture there' : "it's missing there"}`, first?.slot);
     }
     for (const [d, frames] of r.dirs) {
       const nums = [...frames.keys()].sort((a, b) => a - b);

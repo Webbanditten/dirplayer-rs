@@ -3,8 +3,8 @@ import { Icon } from './Icon';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { Animator, FPS } from '../animation';
-import { floorSetup, ownDirections, rotateDirection, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
-import { composite, drawFloor, fitRoom, footprint, roomLayout, tileLoc, type Placement, type RoomLayout } from '../room';
+import { furniSetup, isWallItem, ownDirections, rotateDirection, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
+import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, type Placement, type RoomLayout } from '../room';
 import { spriteRect } from '../furni';
 import { download, encodePng } from '../wasm';
 
@@ -50,6 +50,8 @@ interface Placed {
   setup: FloorSetup;
   x: number;
   y: number;
+  /** a wall item's wall (direction 2 left, 4 right) and how far below the wall's top it hangs */
+  wall?: { direction: number; drop: number };
   animator: Animator;
 }
 
@@ -105,7 +107,8 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
   const smallCast = useMemo(() => furni.isSmallCast(), [furni]);
   const hasSmall = useMemo(() => furni.members.some((m) => m.name.toLowerCase().startsWith('s_' + furni.className().toLowerCase() + '_')), [furni]);
   const useSmall = smallCast || (small && hasSmall);
-  const probe = useMemo(() => floorSetup(furni, { direction, state, colors, shadow, small: useSmall }), [furni, direction, state, colors, shadow, useSmall]);
+  const wallItem = useMemo(() => isWallItem(furni), [furni, rev]);
+  const probe = useMemo(() => furniSetup(furni, { direction, state, colors, shadow, small: useSmall }), [furni, direction, state, colors, shadow, useSmall, rev]);
   const states = probe ? stateNames(probe.data) : ['default'];
   const shownDirection = probe?.direction ?? direction;
   useEffect(() => {
@@ -117,8 +120,31 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
     if (own.length && !own.includes(direction)) setDirection(own.includes(2) ? 2 : own[0]);
   }, [own, direction]);
 
-  // Where furni go: one in the middle, or every direction it has side by side.
+  // Where furni go: one in the middle, or every direction it has side by side; a wall item on its wall (with "all",
+  // the left and the right wall at once).
   const { room, placed } = useMemo(() => {
+    if (wallItem) {
+      const tile = useSmall ? 32 : 64;
+      const dirs = allDirections ? (own.length ? own : [direction]) : [direction];
+      const placed: Placed[] = [];
+      let tallest = 0;
+      let widest = 0;
+      for (const d of dirs) {
+        const setup = furniSetup(furni, { direction: d, state, colors, shadow: false, small: useSmall });
+        if (!setup || placed.some((p) => p.setup.direction === setup.direction)) continue;
+        const layers = setup.layersAt();
+        const above = Math.max(0, ...layers.map((l) => l.regY - l.shiftY));
+        const below = Math.max(0, ...layers.map((l) => l.height - l.regY + l.shiftY));
+        tallest = Math.max(tallest, above + below);
+        widest = Math.max(widest, ...layers.map((l) => l.width));
+        placed.push({ setup, x: 0, y: 0, wall: { direction: setup.direction, drop: above + tile / 4 }, animator: new Animator(setup.data, setup.letters, state) });
+      }
+      const wallHeight = Math.max(tile * 2, tallest + tile / 2 + tile / 4);
+      // Walls long enough for the item: a wall climbs half a tile to the side per tile, plus a tile either side.
+      const span = Math.max(3, Math.ceil(widest / (tile / 2)) + 2);
+      const room = fitRoom(roomLayout({ cols: span, rows: span }, tile, wallHeight), placed.map((p) => ({ x: p.x, y: p.y, wall: p.wall, layers: p.setup.layersAt() })));
+      return { room, placed };
+    }
     const dims = probe?.dims ?? [1, 1];
     const span = Math.max(dims[0], dims[1]) + 1;
     const dirs = allDirections ? (own.length ? own : [direction]) : [direction];
@@ -126,17 +152,17 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
     const rows = span + 1;
     const placed: Placed[] = [];
     dirs.forEach((d, i) => {
-      const setup = floorSetup(furni, { direction: d, state, colors, shadow, small: useSmall });
+      const setup = furniSetup(furni, { direction: d, state, colors, shadow, small: useSmall });
       if (!setup) return;
       placed.push({ setup, x: 1 + (allDirections ? i * span : 0), y: 1, animator: new Animator(setup.data, setup.letters, state) });
     });
     const room = fitRoom(roomLayout({ cols, rows }, useSmall ? 32 : 64), placed.map((p) => ({ x: p.x, y: p.y, layers: p.setup.layersAt() })));
     return { room, placed };
-  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own]);
+  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own, wallItem, rev]);
 
   const floorPixels = useMemo(() => {
     const highlight = new Set<string>();
-    if (showFootprint) for (const p of placed) footprint(p.x, p.y, p.setup.dims, p.setup.direction).forEach((t) => highlight.add(t));
+    if (showFootprint && !wallItem) for (const p of placed) footprint(p.x, p.y, p.setup.dims, p.setup.direction).forEach((t) => highlight.add(t));
     const style = { floor, grid, highlight };
     return transparent
       ? { black: drawFloor(room, { ...style, background: '#000000' }), white: drawFloor(room, { ...style, background: '#ffffff' }) }
@@ -144,13 +170,13 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
   }, [room, placed, floor, background, grid, showFootprint, transparent]);
 
   const moves = placed.some((p) => p.animator.moves);
-  const layersNow = useRef<{ room: RoomLayout; layers: { layer: Layer; x: number; y: number }[] }>({ room, layers: [] });
+  const layersNow = useRef<{ room: RoomLayout; layers: { layer: Layer; x: number; y: number; wall?: Placed['wall'] }[] }>({ room, layers: [] });
 
   // Draw now, and every 1/24 s while animating.
   useEffect(() => {
     const draw = () => {
-      const placements: Placement[] = placed.map((p) => ({ x: p.x, y: p.y, layers: p.setup.layersAt(p.animator.choice()), hidden }));
-      layersNow.current = { room, layers: placements.flatMap((p) => p.layers.map((layer) => ({ layer, x: p.x, y: p.y }))) };
+      const placements: Placement[] = placed.map((p) => ({ x: p.x, y: p.y, wall: p.wall, layers: p.setup.layersAt(p.animator.choice()), hidden }));
+      layersNow.current = { room, layers: placements.flatMap((p) => p.layers.map((layer) => ({ layer, x: p.x, y: p.y, wall: p.wall }))) };
       const c = canvas.current;
       if (!c) return;
       c.width = room.width;
@@ -191,8 +217,8 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
     const y = ((e.clientY - r.top) / r.height) * room.height;
     const { layers } = layersNow.current;
     for (let i = layers.length - 1; i >= 0; i--) {
-      const { layer, x: tx, y: ty } = layers[i];
-      const { locH, locV } = tileLoc(room, tx, ty);
+      const { layer } = layers[i];
+      const { locH, locV } = placementLoc(room, layers[i]);
       const s = spriteRect(layer, locH, locV);
       if (x >= s.left && x < s.left + layer.width && y >= s.top && y < s.top + layer.height && layer.letter !== 'sd') {
         onPick(layer.slot);
@@ -232,7 +258,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
         <button className="icon" onClick={() => setDirection(own.length ? rotateDirection(direction, own) : (direction + 2) % 8)} disabled={allDirections} title="Turn like the client does (to the next direction the furni has)">
           <Icon name="rotate" />
         </button>
-        <label className="chip" title="Every direction the furni has, side by side"><input type="checkbox" checked={allDirections} onChange={(e) => setAllDirections(e.target.checked)} />all</label>
+        <label className="chip" title={wallItem ? 'Both walls at once' : 'Every direction the furni has, side by side'}><input type="checkbox" checked={allDirections} onChange={(e) => setAllDirections(e.target.checked)} />{wallItem ? 'both walls' : 'all'}</label>
         {probe && probe.direction !== direction && !allDirections && <span className="muted small">shows {probe.direction}</span>}
         <span className="spacer" />
         <select value={state} onChange={(e) => setState(+e.target.value)} title="State (.data)">
@@ -261,13 +287,17 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
         {probe ? (
           <canvas ref={canvas} onClick={pick} className={transparent ? 'checker' : undefined} style={{ width: room.width * shownZoom, height: room.height * shownZoom }} title="Click a layer to select its member" />
         ) : (
-          <p className="empty">No floor furni layers found (layer a: <code>&lt;class&gt;_a_0_&lt;w&gt;_&lt;l&gt;_&lt;dir&gt;_&lt;frame&gt;</code>).</p>
+          wallItem ? (
+            <p className="empty">No wall item layers found (layer a: <code>leftwall &lt;class&gt;_a_&lt;frame&gt;</code> or <code>rightwall …</code>, with a <code>&lt;class&gt;.data</code> listing the layers).</p>
+          ) : (
+            <p className="empty">No floor furni layers found (layer a: <code>&lt;class&gt;_a_0_&lt;w&gt;_&lt;l&gt;_&lt;dir&gt;_&lt;frame&gt;</code>).</p>
+          )
         )}
       </div>
       <div className="pane-foot preview-foot">
-        <label className="chip"><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />shadow</label>
+        {!wallItem && <label className="chip"><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />shadow</label>}
         <label className="chip"><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} />grid</label>
-        <label className="chip" title="Light up the tiles the furni stands on (as Odin counts them)"><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} />tiles</label>
+        {!wallItem && <label className="chip" title="Light up the tiles the furni stands on (as Odin counts them)"><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} />tiles</label>}
         {hasSmall && !smallCast && <label className="chip" title="The 32 px members in this cast"><input type="checkbox" checked={small} onChange={(e) => setSmall(e.target.checked)} />32 px</label>}
         <label className="chip" title="Draw the room on a transparent background (saved pictures keep it)"><input type="checkbox" checked={transparent} onChange={(e) => setTransparent(e.target.checked)} />transparent</label>
         <label className="swatch-label" title="Floor">floor <input type="color" value={floor} onChange={(e) => setFloor(e.target.value)} /></label>

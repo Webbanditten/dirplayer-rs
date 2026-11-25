@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile, pickFiles } from './wasm';
 import { buildCast, planFlash, splitPlan } from './flash';
 import { largeFileName, makeSmall, smallFileName } from './small';
-import { ALIAS_INDEX, ASSET_INDEX, Furni, parseMemberName } from './furni';
+import { ALIAS_INDEX, ASSET_INDEX, Furni, isWallItem, parseMemberName } from './furni';
 import { History, type SideKey, type Snap, type Step } from './history';
 import { clearAutosave, loadAutosave, writeAutosave, type Autosave } from './autosave';
 import { checkFurni, type Issue } from './check';
 import { iconMembers, renderIcon, type IconView } from './icon';
-import { FurniGrid, gridModel } from './components/FurniGrid';
+import { FurniGrid, gridModel, memberNameFor } from './components/FurniGrid';
+import { lingoValue, prop } from './lingo';
 import { Inspector, type ImportMode } from './components/Inspector';
 import { Preview } from './components/Preview';
 import { Paint } from './components/Paint';
@@ -97,6 +98,7 @@ export function App() {
   const [className, setClassName] = useState(() => stored('furniEditor.class', 'chair_norja'));
   const [templateClass] = useState(() => stored('furniEditor.template', 'chair_norja'));
   const [flashSmall, setFlashSmall] = useState(() => stored('furniEditor.flashSmall', '0') === '1');
+  const [flashKind, setFlashKind] = useState<'auto' | 'floor' | 'wall'>('auto');
   const [flashColors, setFlashColors] = useState<{ label: string; colour: string }[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -190,7 +192,7 @@ export function App() {
     let swf: SwfDocument | null = null;
     try {
       swf = new SwfDocument(new Uint8Array(await file.arrayBuffer()));
-      const plan = planFlash(swf, file.name, { small: flashSmall });
+      const plan = planFlash(swf, file.name, { small: flashSmall, kind: flashKind });
       const template = `hh_furni_xx_${templateClass.trim() || 'chair_norja'}.cct`;
       const res = await fetch(host.replace(/\/?$/, '/') + template);
       if (!res.ok) throw new Error(`couldn't load the template cast ${template} (HTTP ${res.status})`);
@@ -207,7 +209,7 @@ export function App() {
       setFlashColors(plan.colors.map((c) => ({ label: `flash colour ${c.id}: ${c.colour}`, colour: c.colour })));
       const aliases = plan.fields.find((f) => f.name === ALIAS_INDEX)?.text.split('\n').length ?? 0;
       setStatus(
-        `Converted ${file.name}: ${plan.sprite}, ${plan.dims[0]}×${plan.dims[1]}, ${plan.bitmaps.length} pictures${small ? ' (with a small cast)' : ''}, ${aliases} aliases, ` +
+        `Converted ${file.name}: ${plan.sprite}, ${plan.wall ? 'a wall item' : `${plan.dims[0]}×${plan.dims[1]}`}, ${plan.bitmaps.length} pictures${small ? ' (with a small cast)' : ''}, ${aliases} aliases, ` +
           `${plan.fields.map((f) => f.name).join(', ')}` + (plan.colors.length ? `; ${plan.colors.length} colour variants` : '') +
           (plan.warnings.length ? `. Warnings: ${plan.warnings.slice(0, 4).join('; ')}${plan.warnings.length > 4 ? ` (+${plan.warnings.length - 4})` : ''}` : ''),
       );
@@ -447,14 +449,14 @@ export function App() {
     return () => window.removeEventListener('message', onMessage);
   }, [ready, open]);
 
-  /** Hand both casts to Housekeeping, which checks them and asks before anything is written. */
-  const publish = () => {
+  /** Hand both casts to Housekeeping, which checks them and asks before anything is written. A hotel furni first gets a
+   *  name of its own (the name dialog), then goes on from here. */
+  const publish = (afterRename = false) => {
     if (!doc || !furni) return;
-    const cls = furni.className();
+    const cls = new Furni(doc).className();
     if (!cls) return setStatus('The cast has no furni class to publish');
-    if (hotelFurni && !hotelFurni.madeHere && hotelFurni.sprite.toLowerCase() === cls.toLowerCase())
-      return setStatus(`${cls} is the hotel's own furni and is never written over: "New furni from this…" first, then publish the copy`);
-    const errors = issues.filter((i) => i.level === 'error').length;
+    if (!afterRename && hotelFurni && !hotelFurni.madeHere && hotelFurni.sprite.toLowerCase() === cls.toLowerCase()) return askName('publish');
+    const errors = afterRename ? 0 : issues.filter((i) => i.level === 'error').length;
     if (errors) {
       setCheckOpen(true);
       return setStatus(`Check furni found ${errors} error${errors > 1 ? 's' : ''}: Housekeeping would refuse the cast. Fix ${errors > 1 ? 'them' : 'it'} first`);
@@ -467,7 +469,7 @@ export function App() {
       const buf = (b: Uint8Array) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
       const msg = { type: 'publish', sprite: cls, large: buf(large), small: small ? buf(small) : undefined, colour: flashColors[0]?.colour };
       toParent(msg, [msg.large, ...(msg.small ? [msg.small] : [])]);
-      setStatus(`Sent ${cls} to Housekeeping: check the report there and confirm`);
+      setStatus(`Sent ${cls} to Housekeeping: confirm it in the panel on the left (the check report and its definition)`);
     } catch (e) {
       setStatus(`Couldn't save the casts: ${e}`);
     }
@@ -573,7 +575,7 @@ export function App() {
   const addFrame = async (letter: string, direction: number, frame: number, file?: File) => {
     if (!doc || !furni) return;
     const g = gridModel(furni);
-    const name = `${g.cls}_${letter}_0_${g.dims[0]}_${g.dims[1]}_${direction}_${frame}`;
+    const name = memberNameFor(g, letter, direction, frame);
     const template = templateFor(letter);
     if (!template) return setStatus('No bitmap in the cast to base a new member on');
     const img = await readImage(file);
@@ -590,6 +592,23 @@ export function App() {
     const g = gridModel(furni);
     const dir = g.rows[0] ? Math.min(...g.rows[0].dirs.keys()) : 2;
     await addFrame(letter, dir, 0);
+    // A wall item draws only the layers its .data lists (Item Object Extension Class): add the new one, frame 0 in
+    // every state.
+    if (g.wall && doc) {
+      const dataName = `${g.cls}.data`;
+      edit(`Listed layer ${letter} in ${dataName}`, () => {
+        const slot = ensureField(dataName);
+        const text = (doc.text(slot) ?? '').trim();
+        const states = prop(lingoValue(text.replace(/[\r\n]/g, '')), 'states');
+        const n = Array.isArray(states) && states.length ? states.length : 1;
+        const entry = `${letter}:[ ${Array.from({ length: n }, () => '[ frames:[ 0 ] ]').join(', ')} ]`;
+        const outer = text.lastIndexOf(']');
+        const inner = outer > 0 ? text.lastIndexOf(']', outer - 1) : -1;
+        doc.setText(slot, inner > 0 && /layers\s*:/.test(text)
+          ? `${text.slice(0, inner).replace(/\s+$/, '')},\n${entry}\n${text.slice(inner)}`
+          : `[\nstates:[1],\nlayers:[ \n${entry}\n]\n]`);
+      });
+    }
   };
 
   /** The text member `name`, created from another field when missing. */
@@ -606,18 +625,18 @@ export function App() {
     const g = gridModel(furni);
     const lines: string[] = [];
     for (const row of g.rows) {
-      for (const [from, to] of [[2, 4], [0, 6]]) {
+      for (const [from, to] of g.wall ? [[2, 4]] : [[2, 4], [0, 6]]) {
         const src = row.dirs.get(from);
         if (!src) continue;
         for (const [frame, cell] of src) {
           if (cell.aliasOf) continue;
           const own = row.dirs.get(to)?.get(frame);
           if (own && !own.aliasOf) continue;
-          lines.push(`${g.cls}_${row.letter}_0_${g.dims[0]}_${g.dims[1]}_${to}_${frame}=${cell.name}*`);
+          lines.push(`${memberNameFor(g, row.letter, to, frame)}=${cell.name}*`);
         }
       }
     }
-    if (!lines.length) return setStatus('Directions 4 and 6 already have members or aliases');
+    if (!lines.length) return setStatus(g.wall ? 'The right wall already has members or aliases' : 'Directions 4 and 6 already have members or aliases');
     edit(`Added ${lines.length} mirror aliases to ${ALIAS_INDEX}`, () => {
       const slot = ensureField(ALIAS_INDEX);
       const text = (doc.text(slot) ?? '').replace(/\s+$/, '');
@@ -642,14 +661,54 @@ export function App() {
     setSelected(null);
   };
 
-  /** Rename the whole furni: every member of the class, its fields and the alias and asset indexes. */
-  const cloneAs = () => {
-    if (!doc || !furni) return;
+  /** Why a class name can't be used, or null when it can. */
+  const nameProblem = (next: string, old: string) => {
+    if (!next) return 'Give it a name';
+    if (next === old) return `It's called ${old} already`;
+    if (!/^[a-z0-9_]{1,64}$/.test(next)) return 'Lower-case letters, digits and _ only (at most 64), as the hotel takes class names';
+    if (/^(s_|poster)/.test(next)) return 's_ names a small cast and poster casts are numbered by the catalogue: pick another name';
+    return null;
+  };
+
+  /** The name dialog: renaming, copying a hotel furni, or the copy a hotel furni needs before it can be published. */
+  const [nameAsk, setNameAsk] = useState<{ title: string; text: string; confirm: string; value: string; then?: 'publish' } | null>(null);
+  const isHotelFurni = !!(EMBED && hotelFurni && !hotelFurni.madeHere && furni && hotelFurni.sprite.toLowerCase() === furni.className().toLowerCase());
+  // Tell Housekeeping what is open, so its steps box can say where you are.
+  const openClass = furni?.className() ?? '';
+  const openWall = useMemo(() => (furni ? isWallItem(furni) : false), [furni, rev]);
+  useEffect(() => {
+    if (EMBED && ready) toParent({ type: 'state', sprite: openClass, hotel: isHotelFurni, wall: openWall });
+  }, [openClass, isHotelFurni, openWall, ready]);
+  const askName = (then?: 'publish') => {
+    if (!furni) return;
     const old = furni.className();
-    const next = prompt(`New class name for a copy of ${old} (members and texts are renamed)`, `${old}_2`)?.trim();
-    if (!next || next === old) return;
-    if (!/^[a-z0-9_]{1,64}$/.test(next)) return setStatus('Class names are lower-case letters, digits and _ (at most 64), as the hotel takes them');
-    if (/^(s_|poster)/.test(next)) return setStatus('s_ names a small cast and poster casts are numbered by the catalogue: pick another name');
+    setNameAsk(
+      isHotelFurni || then === 'publish'
+        ? {
+            title: then === 'publish' ? 'Publish as your own furni' : 'Make your own copy',
+            text: `${old} is the hotel's own furni: it is never written over. Your copy gets a name of its own and is published as a new furni; ${old} stays as it is.`,
+            confirm: then === 'publish' ? 'Copy and publish' : 'Make the copy',
+            value: `${old}_2`,
+            then,
+          }
+        : {
+            title: `Rename ${old}`,
+            text: hotelFurni?.madeHere
+              ? `${old} is already in the hotel. A new name publishes a new furni with its own definition; ${old} stays in the hotel as it is.`
+              : 'Every member of the furni (both sizes), its fields and its indexes get the new name. This is the class the hotel and the catalogue know it by.',
+            confirm: 'Rename',
+            value: old,
+          },
+    );
+  };
+
+  /** Rename the whole furni: every member of the class, its fields and the alias and asset indexes. */
+  const cloneAs = (nextName?: string) => {
+    if (!doc || !furni) return false;
+    const old = furni.className();
+    const next = (nextName ?? '').trim();
+    const problem = nameProblem(next, old);
+    if (problem) return setStatus(problem), false;
     const re = new RegExp(`^(s_)?${old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[_.]|$)`, 'i');
     const swap = (s: string) => s.replace(re, (_m, small) => (small ?? '') + next);
     // Members borrowed from other furni (drken_pixel, sofachair_silo_d_...) get the new name in front too: a furni's
@@ -689,6 +748,7 @@ export function App() {
       }
       setFileName(castName(new Furni(doc), fileName));
     }, { both: true });
+    return true;
   };
 
   // --- check furni ---
@@ -746,7 +806,7 @@ export function App() {
   const fixIssue = (i: Issue) => {
     if (i.fix === 'icon') makeIcon();
     else if (i.fix === 'small') switchSize(true);
-    else if (i.fix === 'rename') cloneAs();
+    else if (i.fix === 'rename') askName();
   };
 
   const sel = selected && furni?.bySlot.has(selected.slot) ? selected : null;
@@ -833,6 +893,13 @@ export function App() {
           <label className="chip" title="Also convert the Flash file's 32 px pictures (into the small cast)">
             <input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} />32 px
           </label>
+          <label className="chip" title="Floor furni or a wall item. Auto: a wall item when the Flash furni is wall-thin and only has directions 2 and 4 (left and right wall)">
+            <select value={flashKind} onChange={(e) => setFlashKind(e.target.value as 'auto' | 'floor' | 'wall')}>
+              <option value="auto">auto</option>
+              <option value="floor">floor</option>
+              <option value="wall">wall item</option>
+            </select>
+          </label>
         </div>
         <span className="spacer" />
         {doc && furni && (
@@ -856,14 +923,14 @@ export function App() {
             <Icon name="check" />Check
             {doc && (errorCount ? <span className="count error">{errorCount}</span> : warningCount ? <span className="count warning">{warningCount}</span> : <span className="count ok">✓</span>)}
           </button>
-          <button className="ghost" onClick={cloneAs} disabled={!doc} title="Rename every member of the class (both sizes), for a new furni based on this one">
-            <Icon name="copy" />New from this…
+          <button className="ghost" onClick={() => askName()} disabled={!doc} title={isHotelFurni ? "The hotel's furni is never written over: make a copy under a name of your own, to edit and publish" : 'Rename the furni: every member of the class (both sizes), its fields and its indexes'}>
+            <Icon name="copy" />{isHotelFurni ? 'Make a copy…' : 'Rename…'}
           </button>
           <button className="primary" onClick={save} disabled={!doc} title="Save the cast (and the other size when it has changes)">
             <Icon name="save" />{other?.dirty && dirty ? 'Save both' : 'Save'}
           </button>
           {EMBED && (
-            <button className="primary" onClick={publish} disabled={!doc} title="Housekeeping checks the casts and asks before publishing">
+            <button className="primary" onClick={() => publish()} disabled={!doc} title={isHotelFurni ? "Publish a copy of the hotel's furni under a name of your own (asks for the name)" : 'Housekeeping checks the casts and asks before publishing'}>
               <Icon name="upload" />Publish…
             </button>
           )}
@@ -1017,6 +1084,39 @@ export function App() {
         </div>
       </footer>
       {dragging && <div className="drop-overlay">Drop casts, a .swf or an image</div>}
+      {nameAsk && furni && (() => {
+        const old = furni.className();
+        const problem = nameProblem(nameAsk.value.trim(), old);
+        // the rename dialog opens on the current name: say what it will do rather than "it's called that already"
+        const showProblem = problem && !(nameAsk.value.trim() === old && !isHotelFurni && !nameAsk.then);
+        const ok = () => {
+          if (problem) return;
+          const then = nameAsk.then;
+          if (cloneAs(nameAsk.value)) {
+            setNameAsk(null);
+            if (then === 'publish') setTimeout(() => publish(true), 0);
+          }
+        };
+        return (
+          <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setNameAsk(null)}>
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="name-ask-title">
+              <h3 id="name-ask-title">{nameAsk.title}</h3>
+              <p>{nameAsk.text}</p>
+              <label className="modal-field">
+                <span>Class name</span>
+                <input autoFocus value={nameAsk.value} spellCheck={false} onChange={(e) => setNameAsk({ ...nameAsk, value: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') ok(); if (e.key === 'Escape') setNameAsk(null); }} />
+              </label>
+              <p className={`modal-hint${showProblem ? ' bad' : ''}`}>
+                {showProblem ? problem : `Casts: ${largeFileName(nameAsk.value.trim() || '…')} and ${smallFileName(nameAsk.value.trim() || '…')}`}
+              </p>
+              <div className="modal-buttons">
+                <button className="ghost" onClick={() => setNameAsk(null)}>Cancel</button>
+                <button className="primary" onClick={ok} disabled={!!problem}>{nameAsk.confirm}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
