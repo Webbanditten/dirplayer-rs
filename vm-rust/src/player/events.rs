@@ -115,13 +115,18 @@ pub fn player_dispatch_event_to_sprite(
 /// sprite's and undo it (Matematik i Maaneby's map: a ground patch carrying
 /// one house's behaviour sits under another house, and a pointer landing on
 /// the house lit it and then unlit it in the same event).
+///
+/// Sprites without a script (not "active" in Director's terms) don't take the
+/// pointer, as for clicks (`get_sprite_at(.., scripted = true)`). Habbo's room
+/// visualizer lays a script-less 800x600 mood light sprite (ink 35) over every
+/// guest room; with it front-most, no furni or Habbo under it ever got
+/// mouseEnter, so the room bar's hover text stayed empty (Shockwave shows it).
 pub fn dispatch_rollover_events() {
     let (now_hovered, prev_hovered) = reserve_player_mut(|player| {
         let (x, y) = player.mouse_loc;
         let prev_hovered = std::mem::take(&mut player.hovered_sprites);
-        let now_hovered: Vec<i16> = crate::player::score::get_sprites_at(player, x, y)
-            .first()
-            .map(|num| *num as i16)
+        let now_hovered: Vec<i16> = crate::player::score::get_sprite_at(player, x, y, true)
+            .map(|num| num as i16)
             .into_iter()
             .collect();
         player.hovered_sprites = now_hovered.clone();
