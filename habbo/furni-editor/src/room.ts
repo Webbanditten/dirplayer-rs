@@ -32,6 +32,11 @@ export interface RoomLayout extends RoomSize {
 const HEADROOM = 24;
 const THICKNESS = 8;
 
+/** A guest room's wall height at 64 px: hh_room_private's wall part (left_wallpart_0, 32 x 132, registration -32,115)
+ *  stands 116 px above the floor edge. The preview uses it as it is (half in the 32 px zoom), so an item taller than a
+ *  wall sticks out of it as it does in a room. */
+export const wallHeightFor = (tile: number) => Math.round((116 * tile) / 64);
+
 export function roomLayout(size: RoomSize, tile = 64, wallHeight = 0): RoomLayout {
   const margin = 24, hw = tile / 2, hh = tile / 4;
   const xOffset = margin + (size.rows - 1) * hw;

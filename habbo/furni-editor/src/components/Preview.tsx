@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { Animator, FPS } from '../animation';
 import { furniSetup, isWallItem, ownDirections, rotateDirection, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
-import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, type Placement, type RoomLayout } from '../room';
+import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, wallHeightFor, type Placement, type RoomLayout } from '../room';
 import { spriteRect } from '../furni';
 import { download, encodePng } from '../wasm';
 
@@ -127,7 +127,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
       const tile = useSmall ? 32 : 64;
       const dirs = allDirections ? (own.length ? own : [direction]) : [direction];
       const placed: Placed[] = [];
-      let tallest = 0;
+      const wallHeight = wallHeightFor(tile);
       let widest = 0;
       for (const d of dirs) {
         const setup = furniSetup(furni, { direction: d, state, colors, shadow: false, small: useSmall });
@@ -135,11 +135,11 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
         const layers = setup.layersAt();
         const above = Math.max(0, ...layers.map((l) => l.regY - l.shiftY));
         const below = Math.max(0, ...layers.map((l) => l.height - l.regY + l.shiftY));
-        tallest = Math.max(tallest, above + below);
         widest = Math.max(widest, ...layers.map((l) => l.width));
-        placed.push({ setup, x: 0, y: 0, wall: { direction: setup.direction, drop: above + tile / 4 }, animator: new Animator(setup.data, setup.letters, state) });
+        // centred on the wall's height (the wall keeps the client's height: a taller item sticks out above and below)
+        const drop = Math.round(wallHeight / 2 + (above - below) / 2);
+        placed.push({ setup, x: 0, y: 0, wall: { direction: setup.direction, drop }, animator: new Animator(setup.data, setup.letters, state) });
       }
-      const wallHeight = Math.max(tile * 2, tallest + tile / 2 + tile / 4);
       // Walls long enough for the item: a wall climbs half a tile to the side per tile, plus a tile either side.
       const span = Math.max(3, Math.ceil(widest / (tile / 2)) + 2);
       const room = fitRoom(roomLayout({ cols: span, rows: span }, tile, wallHeight), placed.map((p) => ({ x: p.x, y: p.y, wall: p.wall, layers: p.setup.layersAt() })));
