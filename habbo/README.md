@@ -79,6 +79,17 @@ headless Chromium, for the CMS's featured rooms. See [photographer/README.md](ph
 This fork runs Habbo Danmark only. Where Habbo and another movie need opposite behaviour, Habbo wins, and the
 change is listed here so a rebase onto upstream can keep or drop it on purpose.
 
+- **A room furni's sprite is under the mouse only where its picture shows something**
+  (`vm-rust/src/player/habbo_hit.rs`; on unless the external param `habbo_room_hit=0` is given). Director goes by a
+  sprite's rectangle (only Matte ink by the picture). Habbo's `validateEvent` mends that for a click on a white pixel of
+  a Background Transparent furni and nothing else: a light layer (Add ink) takes every click in its rectangle unless
+  the furni's `.props` marks it `#transparent`, which Sulake left out on a good many (cn_lamp's lit glow is 90 x 117 px
+  around a lantern), and hovering goes by rectangles altogether, so the room bar named the furni whose rectangle was
+  in front. For the sprites of floor furni (`pActiveObjList`) and wall items (`pItemObjList`) the hit test also
+  passes where the picture is: white under ink 36; white or dim (every channel under 96) under the Add and Subtract
+  inks 33, 34, 35, 38; alpha 0 in a 32-bit picture. Windows, the room and Habbos keep Director's rule. Checked in
+  guest room 2119: around the lit lamp only the lantern and its pole select it, the grass and walkway behind it take
+  the other clicks; the knot poster behind the forest wall, a stone lantern and walking work as before.
 - **Room draw order from the furni footprints** (`vm-rust/src/player/habbo_depth.rs`; only with the external param
   `habbo_room_depth=1`, which the CMS web client and this harness set, and only in guest rooms). The client gives a
   room sprite `locZ = 1000 * (x + y + 1) + zshift` from the object's origin tile, so a furni's size doesn't count and

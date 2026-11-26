@@ -5507,9 +5507,11 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
         let center_x = sprite.loc_h as f64;
         let center_y = sprite.loc_v as f64;
 
-        // Translate to registration point
-        let dx = x as f64 - center_x;
-        let dy = y as f64 - center_y;
+        // Translate to registration point. The mouse point is a pixel: take its centre, so that a mirrored sprite
+        // (rotation 180 + skew 180, Habbo's furni in directions 4 and 6) is tested against the pixel that is drawn
+        // there. From the pixel's corner the picture was read one pixel to the side of the drawn one.
+        let dx = x as f64 + 0.5 - center_x;
+        let dy = y as f64 + 0.5 - center_y;
 
         // Apply inverse rotation (negate the angle)
         let theta = -sprite.rotation * std::f64::consts::PI / 180.0;
@@ -5525,12 +5527,16 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
         }
 
         // Translate back
-        let transformed_x = (rx + center_x) as i32;
-        let transformed_y = (ry + center_y) as i32;
+        let transformed_x = (rx + center_x).floor() as i32;
+        let transformed_y = (ry + center_y).floor() as i32;
 
         if transformed_x >= rect.left && transformed_x < rect.right
             && transformed_y >= rect.top && transformed_y < rect.bottom
         {
+            // Habbo fork: a room furni's sprite isn't under the mouse where its picture shows nothing.
+            if crate::player::habbo_hit::see_through(player, sprite, &rect, transformed_x, transformed_y) {
+                return false;
+            }
             return matte_pixel_hit_test(player, sprite, &rect, transformed_x, transformed_y);
         }
         return false;
@@ -5541,6 +5547,9 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
     let right = rect.right;
     let bottom = rect.bottom;
     if x >= left && x < right && y >= top && y < bottom {
+        if crate::player::habbo_hit::see_through(player, sprite, &rect, x, y) {
+            return false;
+        }
         return matte_pixel_hit_test(player, sprite, &rect, x, y);
     }
     false

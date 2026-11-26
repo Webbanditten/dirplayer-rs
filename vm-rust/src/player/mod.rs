@@ -28,6 +28,7 @@ pub mod font;
 pub mod geometry;
 pub mod gif;
 pub mod habbo_depth;
+pub mod habbo_hit;
 pub mod handlers;
 pub mod interp_stats;
 pub mod js_lingo;
@@ -2991,7 +2992,15 @@ impl DirPlayer {
             },
             BuiltInSymbol::StillDown => { self.input_polled = true; Ok(self.alloc_datum(datum_bool(self.movie.mouse_down))) },
             BuiltInSymbol::Rollover => {
-                let sprite = get_sprite_at(self, self.mouse_loc.0, self.mouse_loc.1, false);
+                // The sprite under the mouse that mouse events go to: like clicks and rollover events, it passes
+                // over sprites without a script. Habbo's room code depends on it: `validateEvent` asks
+                // `sprite(the rollover)` for the furni that got the click, hides it when the pixel under the mouse
+                // is see-through and sends the event to `sprite(the rollover)` again, and the tile highlighter
+                // forwards every floor click the same way. A guest room has full-stage sprites without a script
+                // in front of its walls and floor (the mood light, the shadows, the wall wrappers): were they
+                // reported, no click would get through to what is behind a wall item's see-through part (the
+                // posters next to a forest wall), and none of this could work in Director either.
+                let sprite = get_sprite_at(self, self.mouse_loc.0, self.mouse_loc.1, true);
                 Ok(self.alloc_datum(Datum::Int(sprite.unwrap_or(0) as i32)))
             },
             BuiltInSymbol::KeyCode => Ok(self.alloc_datum(Datum::Int(self.keyboard_manager.key_code() as i32))),
