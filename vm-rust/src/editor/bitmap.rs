@@ -3,7 +3,9 @@
 //! `BITD` is the member's rows, `pitch` bytes each, PackBits-compressed row by row (a payload at or above the raw
 //! size is read as uncompressed, so incompressible pixels are stored raw). 8-bit rows are palette indices padded to
 //! an even width; 32-bit rows are channel-planar: the row's alpha bytes, then red, green and blue. Runs are capped
-//! at 127 bytes, as Director writes them (see `compress_bitmap`).
+//! at 127 bytes, as Director writes them (see `compress_bitmap`). Uncompressed 32-bit data is not planar: it is
+//! read pixel by pixel as alpha, red, green, blue (`decompress_bitmap`), so that is how incompressible 32-bit
+//! pixels are stored (a narrow picture of a few pixels a row, each different, doesn't compress).
 //!
 //! Habbo's white-keyed inks (8 matte, 36 background transparent, ...) drop the background colour connected to the
 //! image's edges: palette index 0 in an 8-bit member, white in a 32-bit one. Transparent pixels are written that
@@ -59,12 +61,14 @@ pub struct Encoded {
     pub report: ImportReport,
 }
 
-fn pack_rows(raw: &[u8], pitch: usize) -> Vec<u8> {
+/// The rows PackBits-compressed, or `None` when that isn't smaller than the rows themselves (the reader then takes
+/// the payload as uncompressed).
+fn pack_rows(raw: &[u8], pitch: usize) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(raw.len() / 2);
     for row in raw.chunks(pitch) {
         out.extend_from_slice(&compress_bitmap(row));
     }
-    if out.len() >= raw.len() { raw.to_vec() } else { out }
+    if out.len() >= raw.len() { None } else { Some(out) }
 }
 
 fn nearest(palette: &[(u8, u8, u8)], r: u8, g: u8, b: u8) -> u8 {
@@ -124,7 +128,7 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, mode: ImportMode, palette: O
                 };
             }
         }
-        let bitd = pack_rows(&raw, pitch);
+        let bitd = pack_rows(&raw, pitch).unwrap_or(raw);
         report.depth = 8;
         report.bytes = bitd.len();
         return Ok(Encoded { width, height, depth: 8, bitd, clut_id: Some(clut), clut_cast_lib: None, use_alpha: false, report });
@@ -154,7 +158,17 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, mode: ImportMode, palette: O
             row[w * 3 + x] = b;
         }
     }
-    let bitd = pack_rows(&raw, pitch);
+    let bitd = pack_rows(&raw, pitch).unwrap_or_else(|| {
+        // uncompressed: pixel by pixel, alpha first
+        let mut direct = Vec::with_capacity(pitch * h);
+        for y in 0..h {
+            let row = &raw[y * pitch..(y + 1) * pitch];
+            for x in 0..w {
+                direct.extend_from_slice(&[row[x], row[w + x], row[w * 2 + x], row[w * 3 + x]]);
+            }
+        }
+        direct
+    });
     report.depth = 32;
     report.bytes = bitd.len();
     Ok(Encoded { width, height, depth: 32, bitd, clut_id: None, clut_cast_lib: None, use_alpha, report })
@@ -171,7 +185,7 @@ pub fn encode_indices(indices: &[u8], width: u32, height: u32, clut: i16) -> Res
     for y in 0..h {
         raw[y * pitch..y * pitch + w].copy_from_slice(&indices[y * w..(y + 1) * w]);
     }
-    let bitd = pack_rows(&raw, pitch);
+    let bitd = pack_rows(&raw, pitch).unwrap_or(raw);
     let report = ImportReport { depth: 8, bytes: bitd.len(), ..Default::default() };
     Ok(Encoded { width, height, depth: 8, bitd, clut_id: Some(clut), clut_cast_lib: None, use_alpha: false, report })
 }

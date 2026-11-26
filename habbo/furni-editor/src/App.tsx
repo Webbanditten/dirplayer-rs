@@ -158,6 +158,8 @@ export function App() {
    *  every change to the large cast. `followedGen` is the large generation it was last made from. */
   const [smallFollows, setSmallFollows] = useState(false);
   const followedGen = useRef(0);
+  /** The open small cast was made with the editor's earlier halving: the next sync makes it again and says so. */
+  const remakeSmall = useRef(false);
   const live = useRef({ doc, other, fileName, dirty, smallShown, smallFollows });
   live.current = { doc, other, fileName, dirty, smallShown, smallFollows };
   const keys = (small: boolean): [SideKey, SideKey] => (small ? ['small', 'large'] : ['large', 'small']);
@@ -181,9 +183,12 @@ export function App() {
       const shown = new Furni(next);
       const [mine, theirs] = keys(shown.isSmallCast());
       gens.current = { large: 0, small: 0 };
-      // An untouched small cast (exactly what the editor makes from the large one) keeps following it.
-      followedGen.current = 0;
-      setSmallFollows(follows ?? (!!pair && !shown.isSmallCast() && madeFromLarge(next, pair.doc, shown.className())));
+      // An untouched small cast (exactly what the editor makes from the large one) keeps following it. One made with
+      // the editor's earlier halving is made again right away, with the sharper pictures.
+      const made = follows === undefined && !!pair && !shown.isSmallCast() && madeFromLarge(next, pair.doc, shown.className());
+      remakeSmall.current = made === 'earlier';
+      followedGen.current = made === 'earlier' ? -1 : 0;
+      setSmallFollows(follows ?? !!made);
       saved.current = { [mine]: changed ? -1 : 0, [theirs]: pair?.dirty ? -1 : 0 } as Record<SideKey, number>;
       setOther(pair);
       setDoc(next);
@@ -458,6 +463,10 @@ export function App() {
       live.current = { ...now, other: next };
       setOther(next);
       setTimeout(() => old.free(), 2000); // after everything that showed it has let go
+      if (remakeSmall.current) {
+        remakeSmall.current = false;
+        setStatus('The 32 px version was made with the editor\'s earlier halving: made it again with sharper pictures (save or publish to keep it)');
+      }
       return next;
     } catch (e) {
       console.error('32 px', e);

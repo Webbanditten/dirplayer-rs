@@ -44,6 +44,18 @@ The 32 px version follows the 64 px one by itself ("auto" next to the size switc
 change to the large cast, until the small cast is changed by hand; ↻ makes it follow again. A cast pair opened from
 the hotel follows when its small cast is exactly what the editor would make.
 
+**How the 32 px pictures are made** (`src/downscale.ts`): every 2x2 block of a large picture becomes one of its own
+four pixels, or nothing. A small network picks which, trained on the hotel's own furni: the large pictures and the
+small ones Sulake's artists drew from them (1,366 furni, 8,295 pictures; `tools/downscale` has the training and its
+numbers). It keeps what plain halving loses: a 1 px outline instead of a doubled one, eyes, highlights, thin lines.
+On top of it: no holes inside a shape, the outer outline stays closed, a picture and its mirror image come out
+alike, and all pictures of a furni are sampled on one grid counted from the tile point, so layers and animation
+frames still fit together. An 8-bit picture keeps its palette colours exactly. A 32-bit picture (a Flash import, a
+drawing) also has its near-identical colours blended within a block, so dithered shading comes out smooth, and
+texture (a halftone, a photograph) is averaged instead of picked. It runs in the browser (about 10 ms for a 64 x 64
+picture) and remembers pictures it has done. A small cast made with the editor's earlier halving is recognised when
+its pair is opened and made again.
+
 ## What it does
 
 - **Open** a cast from disk (or drop it on the window), or load one by class name from the hotel's asset host

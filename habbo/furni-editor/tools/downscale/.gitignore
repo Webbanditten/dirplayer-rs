@@ -1,0 +1,7 @@
+data/
+*.npz
+*.json
+*.cjs
+*.png
+*.txt
+__pycache__/

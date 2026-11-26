@@ -45,6 +45,35 @@ fn encode_indexed_and_rgba() {
     assert!(a.use_alpha);
 }
 
+/// A 32-bit picture reads back as it was written, whether its rows compress or not. A narrow picture whose pixels
+/// all differ doesn't compress: its bytes are then stored pixel by pixel (alpha, red, green, blue), not row-planar.
+#[test]
+fn rgba_round_trips_compressed_or_not() {
+    use crate::director::enums::BitmapInfo;
+    use crate::player::bitmap::bitmap::decompress_bitmap;
+    let mut uncompressed = 0;
+    for (w, h, noisy) in [(4u32, 20u32, true), (4, 20, false), (7, 3, true), (40, 12, false), (1, 1, true)] {
+        let mut px = Vec::new();
+        for i in 0..(w * h) {
+            if noisy && i % 3 != 0 {
+                px.extend_from_slice(&[(i * 37 % 251) as u8, (i * 91 % 241) as u8, (i * 53 % 239) as u8, 255]);
+            } else if noisy || i % 5 == 0 {
+                px.extend_from_slice(&[255, 255, 255, 0]);
+            } else {
+                px.extend_from_slice(&[10, 20, 30, 255]);
+            }
+        }
+        let e = encode(&px, w, h, ImportMode::Rgba32, None).unwrap();
+        let info = BitmapInfo { width: w as u16, height: h as u16, reg_x: 0, reg_y: 0, bit_depth: 32, palette_id: 0, clut_cast_lib: -1, pitch: (w * 4) as u16, use_alpha: true, trim_white_space: false, center_reg_point: false };
+        let b = decompress_bitmap(&e.bitd, &info, 1, 1150).unwrap();
+        assert_eq!(b.data, px, "{}x{} {}", w, h, if noisy { "noisy" } else { "plain" });
+        if e.bitd.len() == (w * h * 4) as usize {
+            uncompressed += 1;
+        }
+    }
+    assert!(uncompressed >= 2, "the noisy pictures are stored uncompressed");
+}
+
 #[test]
 fn corpus_round_trips() {
     let mut n = 0;

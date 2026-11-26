@@ -4,6 +4,8 @@
  * picker, airbrush, line, rectangle, ellipse.
  */
 
+import { halveOnGrid } from './downscale';
+
 export type PaintImage =
   | { kind: 'indexed'; w: number; h: number; px: Uint8Array }
   | { kind: 'rgba'; w: number; h: number; px: Uint8Array };
@@ -416,13 +418,18 @@ export function lightRamp(color: number, strength = 1): number[] {
   return out;
 }
 
-/**
- * Half size, for the small (32 px) version of a furni: every 2x2 block becomes one pixel. Pixel art keeps its look by
- * three rules: a block with an outline pixel (dark, luminance under 64) takes the darkest one, so 1 px outlines stay
- * closed; a block that is mostly background stays background; otherwise it takes its commonest colour (32-bit:
- * the average of its visible pixels), so surfaces stay crisp instead of blurred.
- */
+/** Half size, for the small (32 px) version of a furni and for icons: see downscale.ts. */
 export function halve(img: PaintImage, palette: number[]): PaintImage {
+  return halveOnGrid(img, palette).img;
+}
+
+/**
+ * Half size as the editor made it until November 2026, kept to recognise small casts made that way (small.ts
+ * `madeFromLarge`): a block with an outline pixel (dark, luminance under 64) takes the darkest one, a block that is
+ * mostly background stays background, otherwise it takes its commonest colour (32-bit: the average of its visible
+ * pixels). It thickened outlines and swallowed small details (eyes).
+ */
+export function halveEarlier(img: PaintImage, palette: number[]): PaintImage {
   const w = Math.max(1, Math.ceil(img.w / 2)), h = Math.max(1, Math.ceil(img.h / 2));
   const lum = (c: number) => 0.299 * ((c >> 16) & 255) + 0.587 * ((c >> 8) & 255) + 0.114 * (c & 255);
   const block = (x: number, y: number) => {
