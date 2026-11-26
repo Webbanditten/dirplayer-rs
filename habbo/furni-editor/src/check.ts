@@ -11,7 +11,7 @@ import { wallHeightFor } from './room';
 import { canPlaceAnywhere } from './wallplace';
 
 export type Level = 'error' | 'warning' | 'info';
-export type Fix = 'icon' | 'small' | 'rename' | 'shadow';
+export type Fix = 'icon' | 'small' | 'rename' | 'shadow' | 'hang';
 
 export interface Issue {
   level: Level;
@@ -198,9 +198,11 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
       if (canPlaceAnywhere(tile, first, d === 4 ? 'right' : 'left', /poster|photo|post\.it/i.test(own))) continue;
       const most = wallHeightFor(tile) + Math.floor(first.width / 2);
       const which = d === 4 ? 'right' : 'left';
+      // one fix for the furni: a first layer that fits, as Sulake's own tall wall items have (layers.ts addHangLayer)
       push('warning', first.height >= most - 2
-        ? `The ${which} wall picture (${first.width} × ${first.height}) can't be hung in a guest room: all of it has to be on the wall, which takes at most ${most} px of height at that width (the wall's ${wallHeightFor(tile)} px plus half the picture's width). "try placing" under the room shows it`
-        : `The ${which} wall picture can't be hung in a guest room: its registration point (${first.regX}, ${first.regY}) is so far from the picture that the two are never on the wall together, and the hotel places a wall item by that point. "try placing" under the room shows it`, first.slot);
+        ? `Nobody can hang this in a guest room: its first picture on the ${which} wall is ${first.width} × ${first.height}, and all of it has to be on the wall, which takes at most ${most} px of height at that width (the wall's ${wallHeightFor(tile)} px plus half the picture's width). "try placing" under the room shows it`
+        : `Nobody can hang this in a guest room: on the ${which} wall its first picture's registration point (${first.regX}, ${first.regY}) is so far from the picture that the two are never on the wall together, and the hotel places a wall item by that point. "try placing" under the room shows it`, first.slot, 'hang');
+      break;
     }
   }
 

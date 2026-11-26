@@ -20,7 +20,7 @@ import { NewFurni, classNameProblem } from './components/NewFurni';
 import { createFurni, type NewFurniOptions } from './newfurni';
 import { makeShadow } from './shadow';
 import type { HabboPose } from './habbo';
-import { listLayer, readData, stateCount } from './layers';
+import { addHangLayer, listLayer, needsHangLayer, readData, stateCount } from './layers';
 import { Icon, Logo } from './components/Icon';
 
 /** How a change joins the undo history: `group` merges edits in a row (a painting session, arrow-key nudges);
@@ -70,6 +70,21 @@ function store(key: string, value: string) {
  * casts as they are now). From a window of its own every message says `popup: true`.
  * The editor never calls the CMS itself.
  */
+/** A wall item whose first picture is taller than a wall takes gets a first layer the hotel can hang it by
+ *  (layers.ts addHangLayer). True when a cast got one. */
+function makeHangable(...docs: (CastDocument | null | undefined)[]): boolean {
+  let did = false;
+  for (const d of docs) {
+    if (!d) continue;
+    const f = new Furni(d);
+    if (needsHangLayer(f)) {
+      addHangLayer(d, f);
+      did = true;
+    }
+  }
+  return did;
+}
+
 const EMBED = (() => {
   const q = new URLSearchParams(location.search);
   if (q.get('embed') !== 'housekeeping') return null;
@@ -259,12 +274,15 @@ export function App() {
         small = new CastDocument(templateBytes);
         buildCast(small, swf, sizes.small);
       }
+      // a Flash wall item can be taller than a wall takes here: the hotel couldn't hang it as it is
+      const hung = makeHangable(next, small);
       show(next, largeFileName(plan.sprite), true, small ? { doc: small, name: smallFileName(plan.sprite), dirty: true } : null);
       setFlashColors(plan.colors.map((c) => ({ label: `flash colour ${c.id}: ${c.colour}`, colour: c.colour })));
       const aliases = plan.fields.find((f) => f.name === ALIAS_INDEX)?.text.split('\n').length ?? 0;
       setStatus(
         `Converted ${file.name}: ${plan.sprite}, ${plan.wall ? 'a wall item' : `${plan.dims[0]}×${plan.dims[1]}`}, ${plan.bitmaps.length} pictures${small ? ' (with a small cast)' : ''}, ${aliases} aliases, ` +
           `${plan.fields.map((f) => f.name).join(', ')}` + (plan.colors.length ? `; ${plan.colors.length} colour variants` : '') +
+          (hung ? '. Its picture is taller than a wall takes, so it got a first layer the hotel hangs it by (layer a; your pictures start at b)' : '') +
           (plan.warnings.length ? `. Warnings: ${plan.warnings.slice(0, 4).join('; ')}${plan.warnings.length > 4 ? ` (+${plan.warnings.length - 4})` : ''}` : ''),
       );
     } catch (e) {
@@ -283,6 +301,7 @@ export function App() {
       const res = await fetch(host.replace(/\/?$/, '/') + template);
       if (!res.ok) throw new Error(`couldn't load the template cast ${template} (HTTP ${res.status})`);
       const made = createFurni(new Uint8Array(await res.arrayBuffer()), o);
+      const hung = makeHangable(made.large, made.small);
       show(made.large, largeFileName(o.name), true, { doc: made.small, name: smallFileName(o.name), dirty: true }, true);
       setFlashColors([]);
       setHotelFurni(null);
@@ -297,7 +316,7 @@ export function App() {
         made.blank
           ? `Made ${o.name} with an empty canvas over its tiles: paint it here (the tiles show where it stands), then "Make icon" under the room`
           : o.kind === 'wall'
-            ? `Made ${o.name}: a wall item with its mirror image for the right wall, an icon and a 32 px version`
+            ? `Made ${o.name}: a wall item with its mirror image for the right wall, an icon and a 32 px version${hung ? '. Its picture is taller than a wall takes, so it got a first layer the hotel hangs it by (layer a; yours is b)' : ''}`
             : `Made ${o.name}: it stands on its tiles with ${o.shadow ? 'a shadow, ' : ''}an icon and a 32 px version. Drag it in the room to place it exactly`,
       );
       return null;
@@ -1006,6 +1025,7 @@ export function App() {
     else if (i.fix === 'shadow') shadow();
     else if (i.fix === 'small') switchSize(true);
     else if (i.fix === 'rename') askName();
+    else if (i.fix === 'hang') hang();
   };
 
   /** Dragging in the room: the pictures' registration points follow the mouse (a mirrored picture the other way). */
@@ -1020,6 +1040,17 @@ export function App() {
   };
 
   /** The shadow, in the shown cast and in the other size when it's open. */
+  /** A wall item whose first picture doesn't fit a wall gets a first layer the hotel can hang it by (both sizes). */
+  const hang = () => {
+    if (!doc || !furni) return;
+    let summary = '';
+    edit('Made it hangable', () => {
+      summary = addHangLayer(doc, furni);
+      const o = other ? new Furni(other.doc) : null;
+      if (other && o && needsHangLayer(o)) addHangLayer(other.doc, o);
+    }, { both: true });
+    if (summary) setStatus(`${summary}. "try placing" under the room shows where it goes now`);
+  };
   const shadow = () => {
     if (!doc || !furni) return;
     const has = gridModel(furni).shadows.filter((c) => !c.aliasOf).length;

@@ -10,7 +10,9 @@
  * every layer is listed (animation.ts has the stepping rules: `loop: 0` forever, `loop: n` n times, none = once).
  */
 import type { CastDocument } from '../../../vm-rust/pkg/vm_rust.js';
-import { ALIAS_INDEX, isWallItem, parseMemberName, type Furni } from './furni';
+import { ALIAS_INDEX, isWallItem, parseMemberName, wallSetup, type Furni, type Layer } from './furni';
+import { wallHeightFor } from './room';
+import { canPlaceAnywhere, type Wall } from './wallplace';
 import { dataText, lingoValue, numberList, prop, propsText, type LingoValue } from './lingo';
 
 type PropList = Map<string, LingoValue>;
@@ -314,4 +316,122 @@ export function listLayer(doc: CastDocument, furni: Furni, letter: string, alway
   if (!always && !readData(furni)) return false;
   writeField(doc, furni, `${ownName(furni)}.data`, dataText(dataFor(furni, [letter])));
   return true;
+}
+
+// ---------------------------------------------------------------- a wall item the hotel can hang
+
+const WALL_MEMBER = /^(s_)?(left|right)wall (.+)_([a-z])_(\d+)$/i;
+
+/** The picture the client tests while a wall item is carried: the first layer's, per wall the furni has pictures for. */
+function hangPictures(furni: Furni): { wall: Wall; first: Layer }[] {
+  const small = furni.isSmallCast();
+  const out: { wall: Wall; first: Layer }[] = [];
+  for (const d of [2, 4]) {
+    const setup = wallSetup(furni, { direction: d, state: 0, small, shadow: false });
+    const layers = setup?.direction === d ? setup.layersAt() : [];
+    if (layers.length) out.push({ wall: d === 4 ? 'right' : 'left', first: layers.reduce((a, b) => (b.order < a.order ? b : a)) });
+  }
+  return out;
+}
+
+/** A wall item nobody can hang: its first picture has no spot on a guest room's wall (wallplace.ts). */
+export function needsHangLayer(furni: Furni): boolean {
+  if (!isWallItem(furni)) return false;
+  const tile = furni.isSmallCast() ? 32 : 64;
+  return hangPictures(furni).some((p) => !canPlaceAnywhere(tile, p.first, p.wall));
+}
+
+/**
+ * Give a wall item a first layer the hotel can hang it by, the way Sulake's own tall wall items have one
+ * (arabian_wall: layer a is 62 x 135 and fits the wall, the 69 x 181 picture you see is layer b).
+ *
+ * The client tests only the first layer's picture against the wall: all of its rectangle has to be inside one wall,
+ * which takes 116 px of height plus half the picture's width (at 64 px). A taller first picture has no spot at all.
+ * So the layers move up a letter (a becomes b, ...: their pictures, alias lines, `.props` and `.data` entries), and
+ * the new layer a is an unseen picture as wide as the old first one and no higher than the wall, around the
+ * registration point: where that fits, the item hangs, with the rest of it over the wall's edges as it may be.
+ */
+export function addHangLayer(doc: CastDocument, furni: Furni): string {
+  if (!isWallItem(furni)) throw new Error('Only a wall item is hung on a wall');
+  const small = furni.isSmallCast();
+  const cls = furni.className(), lower = cls.toLowerCase(), pre = small ? 's_' : '';
+  const tile = small ? 32 : 64;
+  const parse = (name: string) => {
+    const m = WALL_MEMBER.exec(name);
+    return m && m[3].toLowerCase() === lower && !!m[1] === small ? { wall: m[2].toLowerCase(), letter: m[4].toLowerCase(), frame: m[5] } : null;
+  };
+  const pictures = hangPictures(furni);
+  const letters = new Set<string>();
+  for (const m of furni.members) {
+    const p = m.type === 'bitmap' ? parse(m.name) : null;
+    if (p) letters.add(p.letter);
+  }
+  if (!pictures.length || !letters.size) throw new Error(`The wall item has no layer pictures (leftwall ${cls}_a_0, with a ${cls}.data that lists its layers)`);
+  if (letters.has('z')) throw new Error('The wall item already uses every layer letter');
+  const up = (l: string) => String.fromCharCode(l.charCodeAt(0) + 1);
+  const rename = (name: string) => {
+    const p = parse(name.trim());
+    return p ? `${pre}${p.wall}wall ${cls}_${up(p.letter)}_${p.frame}` : undefined;
+  };
+  // Pictures: the last letter first, so no two share a name on the way.
+  for (const l of [...letters].sort().reverse()) {
+    for (const m of furni.members) {
+      const p = m.type === 'bitmap' ? parse(m.name) : null;
+      if (p && p.letter === l) doc.setName(m.slot, rename(m.name)!);
+    }
+  }
+  // The new first layer: unseen, as wide as the old first picture, no higher than a wall, around the hand.
+  const most = Math.max(8, wallHeightFor(tile) - tile / 4);
+  const aliases: string[] = [];
+  const made: string[] = [];
+  for (const p of pictures) {
+    const name = `${pre}${p.wall}wall ${cls}_a_0`;
+    if (p.first.flip) {
+      // this wall shows the other wall's pictures mirrored
+      aliases.push(`${name}=${pre}${p.wall === 'left' ? 'right' : 'left'}wall ${cls}_a_0*`);
+      continue;
+    }
+    const w = p.first.width, h = Math.min(p.first.height, most);
+    const top = Math.max(0, Math.min(p.first.regY - Math.round(h / 2), p.first.height - h));
+    let regX = p.first.regX, regY = p.first.regY - top;
+    // a registration point too far outside its picture: the unseen layer sits around the hand instead
+    if (!canPlaceAnywhere(tile, { width: w, height: h, regX, regY }, p.wall)) [regX, regY] = [Math.floor(w / 2), Math.floor(h / 2)];
+    const rgba = new Uint8Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) rgba.set([255, 255, 255, 0], i * 4);
+    doc.addBitmap(p.first.slot, name, rgba, w, h, regX, regY, 'rgba');
+    made.push(`${name} (${w} x ${h})`);
+  }
+  // Alias lines: both names move up, and the mirrored wall gets a line for the new layer.
+  const aliasSlot = furni.fieldSlot(ALIAS_INDEX);
+  const lines: string[] = [];
+  for (const line of aliasSlot ? (doc.text(aliasSlot) ?? '').split(/\r?\n|\r/) : []) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const from = line.slice(0, eq).trim();
+    let target = line.slice(eq + 1).trim();
+    const star = target.endsWith('*') ? '*' : '';
+    if (star) target = target.slice(0, -1);
+    lines.push(`${rename(from) ?? from}=${rename(target) ?? target}${star}`);
+  }
+  if (aliases.length || lines.length) writeField(doc, furni, ALIAS_INDEX, [...aliases, ...lines].join('\n'));
+  // .props and .data: every layer a letter up; the new a is behind them all and lets clicks through.
+  const reletter = (map: PropList, first: LingoValue) => {
+    const out: PropList = new Map([['a', first]]);
+    for (const [k, v] of map) out.set(k.length === 1 && /[a-y]/i.test(k) ? up(k.toLowerCase()) : k, v);
+    return out;
+  };
+  const props = readProps(furni);
+  const oldA = prop(props, 'a');
+  const mine: PropList = new Map<string, LingoValue>();
+  const z = numberList(oldA instanceof Map ? prop(oldA, 'zshift') : undefined);
+  if (z?.length) mine.set('zshift', z);
+  mine.set('transparent', 1);
+  writeField(doc, furni, `${pre}${cls}.props`, propsText(reletter(props, mine)));
+  const data = readData(furni);
+  if (data) {
+    const key = [...data.keys()].find((k) => k.toLowerCase() === 'layers') ?? 'layers';
+    data.set(key, reletter(layersOf(data), Array.from({ length: stateCount(data) }, () => frames0())));
+    writeField(doc, furni, `${pre}${cls}.data`, dataText(data));
+  }
+  return `Added a first layer the hotel hangs it by: ${made.join(', ') || aliases.length + ' mirrored'}; the picture${letters.size > 1 ? 's' : ''} moved up a letter (a is now b${letters.size > 1 ? ', ...' : ''})`;
 }

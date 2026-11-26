@@ -100,7 +100,15 @@ its pair is opened and made again.
   decide: the whole rectangle has to be inside one wall (a wall is a 116 px band at 64 px, so a picture can be at most
   116 px plus half its width high), and the registration point has to be on a wall. The item shows solid where it can
   go and faint where it can't, with the reason, the wall part the place is counted from and the `:w=x,y l=x,y l|r`
-  the client would send. Click puts it down. Check warns about a wall picture no spot takes.
+  the client would send. Click puts it down.
+- **A wall item the hotel can hang** (`src/layers.ts` `addHangLayer`): the client tests only the first layer's
+  picture, and a picture taller than the wall takes has no spot at all, so nobody can hang the item (it stays faint
+  in the hand). Sulake's own tall wall items get round it with a first layer that fits and the tall picture in layer
+  b (arabian_wall: a is 62 x 135, b 69 x 181; no layer a among the hotel's 123 wall items is too tall). The editor does
+  the same: the layers move up a letter and the new layer a is an unseen picture as wide as the old first one, no
+  higher than a wall, around the registration point, behind the others and letting clicks through. A Flash import and
+  a new wall item get it by themselves when they need it; for an open cast Check warns ("Nobody can hang this…") with
+  *Make it hangable*, in both sizes.
 - **Check furni** (toolbar; the badge counts errors, else warnings): Housekeeping's rules (lower-case class, bitmaps,
   fields and palettes only, no scripts, only the furni's own member names, asset.index's `#id` and classes, alias lines
   naming only the furni's own members), and what the client would draw differently: aliases to members that aren't
