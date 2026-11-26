@@ -146,7 +146,10 @@ export function App() {
   const [templateClass] = useState(() => stored('furniEditor.template', 'chair_norja'));
   const [flashSmall, setFlashSmall] = useState(() => stored('furniEditor.flashSmall', '0') === '1');
   const [flashKind, setFlashKind] = useState<'auto' | 'floor' | 'wall'>('auto');
-  const [flashTransitions, setFlashTransitions] = useState(() => stored('furniEditor.flashTransitions', '0') === '1');
+  const [flashTransitions, setFlashTransitions] = useState<'skip' | 'states' | 'joined'>(() => {
+    const v = stored('furniEditor.flashTransitions', 'skip');
+    return v === 'joined' ? 'joined' : v === 'states' || v === '1' ? 'states' : 'skip';
+  });
   const [flashColors, setFlashColors] = useState<{ label: string; colour: string }[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -264,7 +267,7 @@ export function App() {
     let swf: SwfDocument | null = null;
     try {
       swf = new SwfDocument(new Uint8Array(await file.arrayBuffer()));
-      const plan = planFlash(swf, file.name, { small: flashSmall, kind: flashKind, transitions: flashTransitions ? 'states' : 'skip' });
+      const plan = planFlash(swf, file.name, { small: flashSmall, kind: flashKind, transitions: flashTransitions });
       const template = `hh_furni_xx_${templateClass.trim() || 'chair_norja'}.cct`;
       const res = await fetch(host.replace(/\/?$/, '/') + template);
       if (!res.ok) throw new Error(`couldn't load the template cast ${template} (HTTP ${res.status})`);
@@ -1241,9 +1244,15 @@ export function App() {
             <label className="chip" title="Also convert the Flash file's own 32 px pictures into the small cast (else the small cast is made from the large pictures)">
               <input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} />its own 32 px pictures
             </label>
-            <label className="chip" title="Flash plays a transition animation on the way into a state (a countdown before the fireworks, a door swinging open). The hotel's furni classes play none, so they are left out; with this on each becomes a state of its own in front of the state it leads to (a click steps: off, countdown, on). Import the file again after changing it">
-              <input type="checkbox" checked={flashTransitions} onChange={(e) => { setFlashTransitions(e.target.checked); store('furniEditor.flashTransitions', e.target.checked ? '1' : '0'); }} />transitions as states of their own
-            </label>
+            <select
+              value={flashTransitions}
+              onChange={(e) => { const v = e.target.value as 'skip' | 'states' | 'joined'; setFlashTransitions(v); store('furniEditor.flashTransitions', v); }}
+              title="Flash plays a transition animation once on the way into a state (a countdown before the fireworks, a door swinging open). The hotel's furni animate a state with one frame list, once or looped, and never go on to another state by themselves. Import the file again after changing this"
+            >
+              <option value="skip">transitions: leave them out</option>
+              <option value="joined">transitions: in front of the state they lead to (countdown, then fireworks, in one loop)</option>
+              <option value="states">transitions: states of their own (a click each: off, countdown, on)</option>
+            </select>
             <select value={flashKind} onChange={(e) => setFlashKind(e.target.value as 'auto' | 'floor' | 'wall')} title="Floor furni or a wall item. Decide by itself: a wall item when the Flash furni is wall-thin and only has directions 2 and 4 (left and right wall)">
               <option value="auto">floor or wall item: decide by itself</option>
               <option value="floor">always floor furni</option>

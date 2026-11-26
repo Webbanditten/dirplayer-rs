@@ -223,12 +223,18 @@ container and chunk layout are Director's. Checked: chair_norja.swf gives Sulake
 and registration points, same aliases and zshift); rare_dragonlamp, tv_flat and ads_calip_lava look like the hotel's
 casts in the preview, and the converted lava lamp, dragon lamp and sofa load and draw in the web client.
 
-Transition animations (ids 100 and up, `transitionTo`): Flash plays one on the way into a state, such as year2027's
-countdown before its fireworks. The 2007 client's furni classes play none (a state is one frame list per layer, once
-or looped), so they are left out, with a note. With *transitions as states of their own* in Settings each becomes a
-state in front of the one it leads to (transitions back to the first state come last): a click steps off, countdown,
-fireworks. It plays once and stays on its last frame until the next click. Off by default, because a lamp that fades
-in and out would need four clicks for a round.
+Transition animations (ids 100 and up, `transitionTo`): Flash plays one once on the way into a state, such as
+year2027's countdown before its fireworks. The 2007 client's furni classes do animate (the hotel's neon signs are
+wall items with the same class), but a state is one frame list per layer, played once or looped, and nothing goes on
+to another state by itself. Settings has three ways to import a transition:
+
+- *leave them out* (the default; a note says so),
+- *in front of the state they lead to*: its frames go before that state's own in one list, each layer's lead-in as
+  long as the longest so they stay in step. year2027's "on" is then countdown and fireworks, and since that state
+  loops, the countdown comes round again every time: the way party_neon1 runs a long pattern in one state;
+- *states of their own*, each in front of the state it leads to (those back to the first state last): a click steps
+  off, countdown, fireworks, and the countdown stays on its last frame until the next click. A lamp that fades in
+  and out would need four clicks for a round.
 
 Not converted: Flash inks without a
 Shockwave equivalent (MULTIPLY, SCREEN; reported in the status line).

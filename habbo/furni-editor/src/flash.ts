@@ -77,11 +77,14 @@ export interface FlashOptions {
   /** floor furni or a wall item; 'auto' (the default) decides from the logic depth and the directions */
   kind?: 'auto' | 'floor' | 'wall';
   /**
-   * Transition animations (ids 100 and up, `transitionTo`): Flash plays one on the way into a state (a countdown
-   * before the fireworks). The 2007 client's furni classes play none, so they are left out ('skip', the default) or
-   * become states of their own in front of the state they lead to ('states': a click steps off, countdown, on).
+   * Transition animations (ids 100 and up, `transitionTo`): Flash plays one once on the way into a state (a countdown
+   * before the fireworks). The 2007 client's furni classes animate a state with one frame list per layer, once or
+   * looped, and never go on to another state by themselves. So a transition is left out ('skip', the default), or
+   * becomes a state of its own in front of the state it leads to ('states': a click steps off, countdown, on), or
+   * goes in front of that state's own frames in one list ('joined': on is countdown then fireworks, and when the state
+   * loops the countdown comes round again, the way the hotel's neon signs run a long pattern in one state).
    */
-  transitions?: 'skip' | 'states';
+  transitions?: 'skip' | 'states' | 'joined';
 }
 
 /** Whether a Flash furni is a wall item: wall-thin (logic depth y < 1) and drawn only for directions 2 and 4 (left and
@@ -326,37 +329,62 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     const anims = allAnims.filter((a) => a.id < 100);
     const transitions = allAnims.filter((a) => a.id >= 100);
     const asStates = options.transitions === 'states';
+    const joined = options.transitions === 'joined';
     for (const t of transitions) {
-      warnings.push(asStates && t.to !== undefined
-        ? `Animation ${t.id} (the transition to state ${t.to + 1}) is a state of its own, in front of it`
-        : `Animation ${t.id} (a transition) left out (Settings can bring transitions in as states of their own)`);
+      warnings.push(t.to === undefined || (!asStates && !joined)
+        ? `Animation ${t.id} (a transition) left out (Settings can bring transitions in: as states of their own, or in front of the state they lead to)`
+        : asStates
+          ? `Animation ${t.id} (the transition to state ${t.to + 1}) is a state of its own, in front of it`
+          : `Animation ${t.id} (the transition to state ${t.to + 1}) plays in front of that state's own frames, in one list`);
     }
     if (anims.length || (wall && usedLetters.length)) {
       const count = anims.length ? Math.max(...anims.map((a) => a.id)) + 1 : 1;
       // The states in the order a click steps through them: each one after the transitions that lead into it, the
       // ones back to the first state last.
       const order: (Element | undefined)[] = [];
-      const into = (s: number) => (asStates ? transitions.filter((t) => t.to === s).map((t) => t.el) : []);
+      const into = (s: number) => transitions.filter((t) => t.to === s).map((t) => t.el);
       for (let s = 0; s < count; s++) {
-        if (s > 0) order.push(...into(s));
+        if (s > 0 && asStates) order.push(...into(s));
         order.push(anims.find((a) => a.id === s)?.el);
       }
-      order.push(...into(0));
+      if (asStates) order.push(...into(0));
       const states = order.length;
+      /** A layer's frames in an animation, each as often as it is shown (frameRepeat), and how it runs. */
+      const layerOf = (anim: Element | undefined, id: number) => {
+        const al = anim?.querySelector(`animationLayer[id="${id}"]`);
+        const seqs = al ? Array.from(al.querySelectorAll('frameSequence')) : [];
+        const frames = seqs.flatMap((seq) => Array.from(seq.querySelectorAll('frame')).map((f) => num(f, 'id') ?? 0));
+        return { frames, loop: num(al, 'loopCount'), delay: Math.max(1, num(al, 'frameRepeat') ?? 1), random: seqs.some((seq) => seq.getAttribute('random') === '1') };
+      };
+      const ticks = (l: { frames: number[]; delay: number }) => l.frames.flatMap((f) => Array.from({ length: l.delay }, () => f));
       const lines: string[] = [];
       for (const letter of usedLetters) {
         const id = LETTERS.indexOf(letter);
         const perState: string[] = [];
         for (let s = 0; s < states; s++) {
-          const al = order[s]?.querySelector(`animationLayer[id="${id}"]`);
-          const seqs = al ? Array.from(al.querySelectorAll('frameSequence')) : [];
-          const frames = seqs.flatMap((seq) => Array.from(seq.querySelectorAll('frame')).map((f) => num(f, 'id') ?? 0));
+          const own = layerOf(order[s], id);
+          let { frames, delay } = own;
+          const lead = joined && !own.random ? into(anims.findIndex((a) => a.el === order[s]) >= 0 ? anims.find((a) => a.el === order[s])!.id : -1) : [];
+          if (lead.length) {
+            // Every layer's lead-in is as long as the longest one, so the layers stay in step when the list loops.
+            const before: number[] = [];
+            for (const t of lead) {
+              const length = Math.max(...usedLetters.map((l) => ticks(layerOf(t, LETTERS.indexOf(l))).length), 1);
+              const mine = ticks(layerOf(t, id));
+              const pad = mine.length ? mine[mine.length - 1] : 0;
+              before.push(...mine, ...Array.from({ length: length - mine.length }, () => pad));
+            }
+            const after = ticks({ frames: frames.length ? frames : [0], delay });
+            // a layer that shows one frame all the way through stays one frame
+            if (new Set([...before, ...after]).size > 1) {
+              frames = [...before, ...after];
+              delay = 1;
+            }
+          }
           const parts: string[] = [];
-          const loop = num(al, 'loopCount');
-          const delay = num(al, 'frameRepeat');
-          if (loop !== undefined) parts.push(`loop:${loop}`);
-          if (delay !== undefined && delay > 1) parts.push(`delay:${delay}`);
-          if (seqs.some((seq) => seq.getAttribute('random') === '1')) parts.push('random:1');
+          if (own.loop !== undefined) parts.push(`loop:${own.loop}`);
+          if (delay > 1) parts.push(`delay:${delay}`);
+          if (own.random) parts.push('random:1');
           parts.push(`frames:[ ${(frames.length ? frames : [0]).join(',')} ]`);
           perState.push(`[ ${parts.join(', ')} ]`);
         }
