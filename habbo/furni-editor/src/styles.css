@@ -206,7 +206,7 @@ label.chip:has(input:focus-visible) { outline: 2px solid var(--ring); outline-of
 .brand-name em { font-style: normal; color: var(--accent-text); }
 .tb-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 0; }
 .tb-div { width: 1px; height: 22px; background: var(--line); }
-.topbar .cls { width: 210px; }
+.topbar .cls { width: 150px; }
 .doc-pill {
   display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 999px; max-width: 360px;
   background: var(--field); border: 1px solid var(--line); font: var(--font-mono); color: var(--muted); overflow: hidden;
@@ -533,3 +533,23 @@ label.chip:has(input:focus-visible) { outline: 2px solid var(--ring); outline-of
 .habbo-ctl { display: inline-flex; align-items: center; gap: 6px; }
 .habbo-ctl label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .habbo-ctl input[type='number'] { width: 58px; }
+
+/* --- what next (nothing selected) --- */
+.next-steps { display: flex; flex-direction: column; gap: 6px; padding: 14px; }
+.next-steps h4 { margin: 0; font-size: 13px; }
+.next-steps p { margin: 0 0 4px; }
+.next-steps button { height: auto; padding: 8px 10px; display: flex; align-items: flex-start; justify-content: flex-start; gap: 10px; text-align: left; white-space: normal; }
+.next-steps button .icon-svg { flex: none; margin-top: 2px; color: var(--accent-text); }
+.next-steps button.primary .icon-svg { color: inherit; }
+.next-steps button span { display: flex; flex-direction: column; gap: 1px; font-size: 12px; color: var(--muted); line-height: 1.35; }
+.next-steps button span b { font-size: 13px; color: var(--text); }
+.next-steps button.primary span, .next-steps button.primary span b { color: inherit; }
+.dir .arrow { font-size: 10px; opacity: 0.7; margin-right: 1px; }
+.dir-pills .dir { width: auto; min-width: 34px; padding: 0 7px; }
+/* layers rows: three tidy lines */
+.lp-fields .row { gap: 6px 10px; }
+.lp-fields label { white-space: nowrap; }
+.lp-fields select { max-width: 170px; }
+.lp-fields input[type='range'] { width: 70px; }
+.lp-fields input[type='number'] { width: 58px; }
+.pane-head .close-sel { margin-left: auto; }

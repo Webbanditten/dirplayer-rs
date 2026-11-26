@@ -66,6 +66,10 @@ export interface MoveTarget {
   regY: number;
 }
 
+/** Where a direction faces on the screen (0 is away to the right, 2 towards you to the right...). */
+const ARROWS: Record<number, string> = { 0: '↗', 1: '→', 2: '↘', 3: '↓', 4: '↙', 5: '←', 6: '↖', 7: '↑' };
+const FACING: Record<number, string> = { 0: 'right-up (its back to you)', 2: 'right-down', 4: 'left-down', 6: 'left-up (its back to you)' };
+
 interface HotelFurni {
   id: number;
   sprite: string;
@@ -384,14 +388,15 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
   };
 
   const letters = probe?.letters ?? [];
+  const tinted = useMemo(() => !!probe?.layersAt().some((l) => l.ink === 41), [probe]);
   return (
     <div className="preview">
       <div className="pane-head">
         <span className="pane-title"><Icon name="room" size={14} />Room</span>
-        <span className="dir-pills" title="Direction">
-          {[0, 1, 2, 3, 4, 5, 6, 7].map((d) => (
-            <button key={d} className={`dir${d === direction ? ' on' : ''}`} onClick={() => setDirection(d)} disabled={allDirections || (own.length > 0 && !own.includes(d))} title={own.length && !own.includes(d) ? 'The furni has no members for this direction (the client never turns it here)' : `Direction ${d}`}>
-              {d}
+        <span className="dir-pills" title={wallItem ? 'The wall it hangs on' : 'The way it faces (the hotel turns furni to 0, 2, 4 and 6)'}>
+          {(wallItem ? [2, 4] : [...new Set([0, 2, 4, 6, ...own])].sort((a, b) => a - b)).map((d) => (
+            <button key={d} className={`dir${d === shownDirection ? ' on' : ''}`} onClick={() => setDirection(d)} disabled={allDirections || (own.length > 0 && !own.includes(d))} title={own.length && !own.includes(d) ? (wallItem ? 'No pictures for this wall' : `The furni has no pictures for direction ${d}: the hotel never turns it there`) : wallItem ? (d === 4 ? 'The right wall' : 'The left wall') : `Direction ${d}: facing ${FACING[d] ?? ''}`}>
+              {wallItem ? (d === 4 ? 'right wall' : 'left wall') : <><span className="arrow">{ARROWS[d] ?? ''}</span>{d}</>}
             </button>
           ))}
         </span>
@@ -399,18 +404,23 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
           <Icon name="rotate" />
         </button>
         <label className="chip" title={wallItem ? 'Both walls at once' : 'Every direction the furni has, side by side'}><input type="checkbox" checked={allDirections} onChange={(e) => setAllDirections(e.target.checked)} />{wallItem ? 'both walls' : 'all'}</label>
-        {probe && probe.direction !== direction && !allDirections && <span className="muted small">shows {probe.direction}</span>}
         <span className="spacer" />
-        <select value={state} onChange={(e) => setState(+e.target.value)} title="State (.data)">
-          {states.map((s, i) => <option key={i} value={i}>{i}: {s}</option>)}
-        </select>
-        <button className={`icon${playing && moves ? ' primary' : ''}`} onClick={() => setPlaying(!playing)} disabled={!moves} title={moves ? (playing ? 'Pause' : 'Play') : 'This state doesn\'t move'}>
-          <Icon name={playing && moves ? 'pause' : 'play'} />
-        </button>
-        <span className="frame-count">{moves ? `frame ${tick}` : 'still'}</span>
+        {states.length > 1 && (
+          <select value={state} onChange={(e) => setState(+e.target.value)} title="The state it is in (the States tab says what each shows)">
+            {states.map((s, i) => <option key={i} value={i}>{i + 1}: {s}</option>)}
+          </select>
+        )}
+        {moves && (
+          <>
+            <button className={`icon${playing ? ' primary' : ''}`} onClick={() => setPlaying(!playing)} title={playing ? 'Pause' : 'Play'}>
+              <Icon name={playing ? 'pause' : 'play'} />
+            </button>
+            <span className="frame-count">frame {tick}</span>
+          </>
+        )}
       </div>
       <div className="preview-sub">
-        <input className="colors" placeholder="#FFFFFF,#F7EBBC (items_definitions.colour)" value={colors} onChange={(e) => setColors(e.target.value)} title="Part colours" spellCheck={false} />
+        {(tinted || variants.length > 0 || colors.trim() !== '') && <input className="colors" placeholder="#FFFFFF,#F7EBBC" value={colors} onChange={(e) => setColors(e.target.value)} title="Part colours, one per layer (a, b, c...): what tinted layers are coloured with (items_definitions.colour). The Layers tab has a colour picker per tinted layer" spellCheck={false} />}
         {variants.length > 0 && (
           <select value={variants.findIndex((v) => v.colour === colors)} onChange={(e) => setColors(variants[+e.target.value]?.colour ?? colors)} title="Colour variants (the hotel's items_definitions, or the imported Flash file's)">
             <option value={-1}>colours…</option>
@@ -473,8 +483,8 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
           <option value={0}>fit</option>
           {[1, 2, 3, 4].map((z) => <option key={z} value={z}>{z}×</option>)}
         </select>
-        {onMakeIcon && <button className="icon" disabled={!probe} onClick={() => onMakeIcon({ direction: shownDirection, state, colors })} title={`Make the icon (${cls}_small) from this view: the furni in direction ${shownDirection}, this state and these colours, at 32 px`}><Icon name="image" /></button>}
-        <button className="icon" disabled={!probe} onClick={savePicture} title="Save picture: the room as drawn now, as a PNG"><Icon name="camera" /></button>
+        {onMakeIcon && <button disabled={!probe} onClick={() => onMakeIcon({ direction: shownDirection, state, colors })} title={`Make the icon (${cls}_small), the picture the hand, trades and the catalogue show, from this view: the furni in direction ${shownDirection}, this state and these colours`}><Icon name="image" size={14} />Make icon</button>}
+        <button className="icon" disabled={!probe} onClick={savePicture} title="Save a picture of the room as it is drawn now (PNG)"><Icon name="camera" /></button>
       </div>
     </div>
   );

@@ -24,10 +24,10 @@ interface Slot {
 function slotsFor(kind: 'floor' | 'wall', turns: Turns): Slot[] {
   if (kind === 'wall') return [{ direction: 2, label: 'On the left wall', hint: 'The right wall shows it mirrored' }];
   if (turns === 'none') return [{ direction: 0, label: 'The furni', hint: 'It looks the same however it is placed' }];
-  if (turns === 'mirror') return [{ direction: 2, label: 'Facing left-down', hint: 'Turned, it shows this mirrored' }];
+  if (turns === 'mirror') return [{ direction: 2, label: '↘ Facing right-down', hint: 'Turned, it shows this mirrored (facing left-down)' }];
   return [
-    { direction: 2, label: 'Facing left-down (2)', hint: 'Its mirror image is direction 4' },
-    { direction: 0, label: 'Facing right-up (0)', hint: 'Usually the back view; mirrored it is direction 6' },
+    { direction: 2, label: '↘ Facing right-down (direction 2)', hint: 'The front. Its mirror image faces left-down (4)' },
+    { direction: 0, label: '↗ Facing right-up (direction 0)', hint: 'The back. Its mirror image faces left-up (6)' },
   ];
 }
 

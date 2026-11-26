@@ -79,19 +79,25 @@ export function LayersPanel({ doc, furni, rev, edit, direction, state, colors, s
                     <input type="color" value={/^#[0-9a-f]{6}$/i.test(colourList[i] ?? '') ? colourList[i] : '#ffffff'} onChange={(e) => setColour(i, e.target.value)} />
                   </label>
                 )}
+              </div>
+              <div className="row">
                 <label title="How solid it is: 100 = solid, lower lets what is behind show through">
                   solid
                   <input type="range" min={0} max={100} step={5} value={p.blend} onChange={(e) => change(`${e.target.value}% solid`, { blend: +e.target.value })} />
                   <span className="lp-num">{p.blend}%</span>
                 </label>
-              </div>
-              <div className="row">
                 {!wall && (
                   <>
                     <label title="Depth (#zshift): higher is drawn further in front. Layers start a step apart (a, b, c...); a Habbo on the same tile sits between them, so a seat's back usually gets a low depth and its arm rests a high one">
                       depth
                       <input type="number" step={1} value={depth} onChange={(e) => setDepth(Math.round(+e.target.value || 0), !perDirection)} />
                     </label>
+                  </>
+                )}
+              </div>
+              <div className="row">
+                {!wall && (
+                  <>
                     <label className="chip" title="One depth for every direction, or its own per direction (a chair's back is behind you from the front and in front of you from the back): turn the room to set each">
                       <input type="checkbox" checked={perDirection} onChange={(e) => (e.target.checked ? change('its own depth per direction', { zshift: Array.from({ length: 8 }, () => depth) }) : change(`depth ${depth} in every direction`, { zshift: [depth] }))} />per direction{perDirection ? ` (now ${shownDir})` : ''}
                     </label>

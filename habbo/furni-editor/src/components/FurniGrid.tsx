@@ -136,8 +136,8 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
         <span className="spacer" />
         {onShadow && !g.wall && <button onClick={onShadow} title={g.shadows.length ? 'Make the shadow again: the furni\'s tiles as a flat dark shape (replaces the one it has)' : 'Make a shadow: the furni\'s tiles as a flat dark shape, like the hotel\'s furni have'}><Icon name="room" size={14} />Shadow</button>}
         {onAddLight && <button onClick={onAddLight} title="Add a glow layer (ink 33), like the dragon lamp's halo or the HC lamp's floor light"><Icon name="sun" size={14} />Light…</button>}
-        <button onClick={onMirror} title={g.wall ? 'Add memberalias.index lines so the right wall shows the left wall\'s members mirrored, where it has none of its own' : 'Add memberalias.index lines so directions 4 and 6 show 2 and 0 mirrored, where they have no members of their own'}>
-          <Icon name="mirror" size={14} />{g.wall ? 'left → right' : '2→4, 0→6'}
+        <button onClick={onMirror} title={g.wall ? 'Show the left wall\'s pictures mirrored on the right wall, where it has none of its own (alias names in memberalias.index)' : 'Show directions 2 and 0 mirrored as 4 and 6, where those have no pictures of their own (alias names in memberalias.index)'}>
+          <Icon name="mirror" size={14} />Mirror
         </button>
       </div>
       {g.rows.map((row, i) => (

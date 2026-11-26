@@ -279,6 +279,7 @@ export function App() {
       const f = new Furni(made.large);
       const first = f.members.find((m) => m.type === 'bitmap' && /_a_0(_|$)/.test(m.name));
       if (made.blank && first) setPainting(first.slot);
+      else if (first) setSelected({ slot: first.slot });
       setStatus(
         made.blank
           ? `Made ${o.name} with an empty canvas over its tiles: paint it here (the tiles show where it stands), then "Make icon" under the room`
@@ -974,6 +975,14 @@ export function App() {
   };
 
   const sel = selected && furni?.bySlot.has(selected.slot) ? selected : null;
+  /** The furni's main picture: layer a's first own picture (direction 2 first). */
+  const firstPicture = useMemo(() => {
+    if (!furni) return undefined;
+    const row = gridModel(furni).rows[0];
+    const dirs = [...(row?.dirs.entries() ?? [])].sort((a, b) => (a[0] === 2 ? -1 : b[0] === 2 ? 1 : a[0] - b[0]));
+    for (const [, frames] of dirs) for (const c of frames.values()) if (!c.aliasOf) return c.slot;
+    return undefined;
+  }, [furni]);
   const paint = (slot: number) => {
     if (furni?.bySlot.get(slot)?.bitmap) {
       setSelected({ slot });
@@ -1078,26 +1087,16 @@ export function App() {
             <Icon name="folder" />Open
           </button>
           {hotelField}
-          <button onClick={flashImport} disabled={!ready} title="Convert a Flash furni (.swf) into a Shockwave cast; you can also drop the .swf on the window">
+          <button onClick={flashImport} disabled={!ready} title="Convert a Flash furni (.swf) into a Shockwave cast; you can also drop the .swf on the window. Its options are in Settings">
             <Icon name="bolt" />Flash
           </button>
-          <label className="chip" title="Also convert the Flash file's 32 px pictures (into the small cast)">
-            <input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} />32 px
-          </label>
-          <label className="chip" title="Floor furni or a wall item. Auto: a wall item when the Flash furni is wall-thin and only has directions 2 and 4 (left and right wall)">
-            <select value={flashKind} onChange={(e) => setFlashKind(e.target.value as 'auto' | 'floor' | 'wall')}>
-              <option value="auto">auto</option>
-              <option value="floor">floor</option>
-              <option value="wall">wall item</option>
-            </select>
-          </label>
         </div>
         <span className="spacer" />
         {doc && furni && (
           <div className="tb-group">
-            <span className="doc-pill" title={[fileName, other?.name].filter(Boolean).join(' + ')}>
-              <span className={`dot${dirty ? ' dirty' : ''}`} />
-              <span className="name">{fileName}</span>
+            <span className="doc-pill" title={[fileName, other?.name].filter(Boolean).join(' + ') + (anyDirty ? ' (changed since it was saved)' : '')}>
+              <span className={`dot${anyDirty ? ' dirty' : ''}`} />
+              <span className="name">{furni.className() || fileName}</span>
             </span>
             {sizeSwitch}
           </div>
@@ -1117,8 +1116,8 @@ export function App() {
           <button className="ghost" onClick={() => askName()} disabled={!doc} title={isHotelFurni ? "The hotel's furni is never written over: make a copy under a name of your own, to edit and publish" : 'Rename the furni: every member of the class (both sizes), its fields and its indexes'}>
             <Icon name="copy" />{isHotelFurni ? 'Make a copy…' : 'Rename…'}
           </button>
-          <button className="primary" onClick={save} disabled={!doc} title="Save the cast (and the other size when it has changes)">
-            <Icon name="save" />{other?.dirty && dirty ? 'Save both' : 'Save'}
+          <button className={EMBED ? 'ghost' : 'primary'} onClick={save} disabled={!doc} title={EMBED ? 'Download the casts as files (.cct). Publishing doesn\'t need them' : 'Save the cast as a file (and the other size when it has changes)'}>
+            <Icon name={EMBED ? 'download' : 'save'} />{EMBED ? 'Download' : other?.dirty && dirty ? 'Save both' : 'Save'}
           </button>
           {EMBED && (
             <button className="primary" onClick={() => publish()} disabled={!doc} title={isHotelFurni ? "Publish a copy of the hotel's furni under a name of your own (asks for the name)" : 'Housekeeping checks the casts and asks before publishing'}>
@@ -1134,6 +1133,15 @@ export function App() {
             <h4>Asset host</h4>
             <input value={host} onChange={(e) => setHost(e.target.value)} onBlur={() => store('furniEditor.host', host)} spellCheck={false} title="Where hof_furni casts are loaded from" />
             <span className="muted small">Casts are loaded from here by class name; Flash imports and new furni use its chair_norja as their template.</span>
+            <h4>Flash import</h4>
+            <label className="chip" title="Also convert the Flash file's own 32 px pictures into the small cast (else the small cast is made from the large pictures)">
+              <input type="checkbox" checked={flashSmall} onChange={(e) => { setFlashSmall(e.target.checked); store('furniEditor.flashSmall', e.target.checked ? '1' : '0'); }} />its own 32 px pictures
+            </label>
+            <select value={flashKind} onChange={(e) => setFlashKind(e.target.value as 'auto' | 'floor' | 'wall')} title="Floor furni or a wall item. Decide by itself: a wall item when the Flash furni is wall-thin and only has directions 2 and 4 (left and right wall)">
+              <option value="auto">floor or wall item: decide by itself</option>
+              <option value="floor">always floor furni</option>
+              <option value="wall">always a wall item</option>
+            </select>
             <h4>Hotel website</h4>
             <input value={site} onChange={(e) => setSite(e.target.value)} onBlur={() => store('furniEditor.site', site)} spellCheck={false} title="Where the Habbo in the preview room comes from (its /habbo-imaging/avatarimage)" />
             <h4>Theme</h4>
@@ -1212,7 +1220,7 @@ export function App() {
               <span className="pane-title"><Icon name="layers" size={14} />Members</span>
               <span className="spacer" />
               <span className="segmented">
-                <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')} title="The furni's pictures: layers by direction and frame">Furni</button>
+                <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')} title="The furni's pictures: layers by direction and frame">Pictures</button>
                 <button className={tab === 'layers' ? 'on' : ''} onClick={() => setTab('layers')} title="How each layer is drawn: ink, colour, see-through, depth">Layers</button>
                 <button className={tab === 'states' ? 'on' : ''} onClick={() => setTab('states')} title="What it shows in each state (off, on...) and what moves">States</button>
                 <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')} title="Every member of the cast">All ({furni.members.length})</button>
@@ -1260,18 +1268,24 @@ export function App() {
           </section>
           <section className="pane right">
             <div className="pane-head">
-              <span className="pane-title"><Icon name="inspect" size={14} />Inspector</span>
+              <span className="pane-title"><Icon name="inspect" size={14} />{sel ? 'Inspector' : 'What next'}</span>
+              {sel && <button className="icon ghost close-sel" onClick={() => setSelected(null)} title="Done with this picture: back to what to do next"><Icon name="close" /></button>}
             </div>
             <div className="pane-body">
               {sel ? (
                 <Inspector key={sel.slot} doc={doc} furni={furni} rev={rev} slot={sel.slot} alias={sel.alias} importMode={importMode} setImportMode={setImportMode} edit={edit} onImport={importInto} onExport={exportMember} onDuplicate={duplicate} onDelete={remove} onPaint={paint} />
               ) : (
-                <div className="inspector-empty">
-                  <div>
-                    <Icon name="inspect" size={28} />
-                    Pick a member in the grid, the list or the room.
-                    <div className="small" style={{ marginTop: 6 }}>Double-click a picture to paint it.</div>
-                  </div>
+                <div className="next-steps">
+                  <p className="muted small">Pick a picture in the grid or the room to see it here. Or:</p>
+                  {firstPicture !== undefined && (
+                    <button onClick={() => paint(firstPicture)}><Icon name="brush" /><span><b>Paint it</b>Draw on its pixels, with the tiles it stands on shown</span></button>
+                  )}
+                  <button onClick={() => addLayer(String.fromCharCode(97 + gridModel(furni).rows.length))}><Icon name="plus" /><span><b>Add a layer</b>Another picture on top: a cushion to colour, a glass pane, a glow</span></button>
+                  <button onClick={() => setTab('layers')}><Icon name="layers" /><span><b>Set how layers are drawn</b>Tinted with a colour, see-through, in front of or behind a Habbo</span></button>
+                  <button onClick={() => setTab('states')}><Icon name="play" /><span><b>Make it switch or move</b>States (a lamp's off and on) and frames that play</span></button>
+                  {!openWall && <button onClick={() => setPose('sit')}><Icon name="room" /><span><b>Try a Habbo on it</b>Sitting, lying or beside it: sets the seat height too</span></button>}
+                  <button onClick={() => setCheckOpen(true)}><Icon name="check" /><span><b>Check it</b>{errorCount ? `${errorCount} thing${errorCount > 1 ? 's' : ''} the hotel would refuse` : warningCount ? `${warningCount} thing${warningCount > 1 ? 's' : ''} to look at` : 'Nothing found: ready for the hotel'}</span></button>
+                  {EMBED && <button className="primary" onClick={() => publish()}><Icon name="upload" /><span><b>Publish…</b>Housekeeping checks it and asks before it goes into the hotel</span></button>}
                 </div>
               )}
             </div>

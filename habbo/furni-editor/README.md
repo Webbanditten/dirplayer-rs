@@ -49,7 +49,9 @@ the hotel follows when its small cast is exactly what the editor would make.
 - **Open** a cast from disk (or drop it on the window), or load one by class name from the hotel's asset host
   (`https://images.habbo-danmark.com/hof_furni/`, which sends CORS headers). **Save .cct** downloads the cast,
   afterburned like Director writes it, named after its class.
-- **Furni grid**: the class's layers (a, b, c...) by direction and frame, from the member names
+- With nothing selected the right pane lists **what to do next** (paint, add a layer, layers, states, a Habbo, check,
+  publish); the room's direction buttons are the ways the furni can face (↗ 0, ↘ 2, ↙ 4, ↖ 6).
+- **Furni grid** (the Pictures tab): the class's layers (a, b, c...) by direction and frame, from the member names
   `<class>_<layer>_0_<length>_<width>_<direction>_<frame>` and `memberalias.index` (dashed cells; ⇋ = mirrored). Then
   the shadow (`_sd`), the icon (`_small`), the 32 px members (`s_<class>`) and anything else. `+` adds a frame (click to
   pick an image, or drop one on it), "New layer" adds a layer, "Mirror 2→4, 0→6" writes the alias lines that show
@@ -67,7 +69,8 @@ the hotel follows when its small cast is exactly what the editor would make.
 - **New furni from this**: renames every member of the class, its fields and the alias and asset indexes, for a new
   furni based on an existing one.
 - **Import Flash furni**: a Flash-era furni (`<sprite>.swf`, button or drop it on the window) becomes a Shockwave cast,
-  ready to save and edit; "32 px" also converts the small pictures (`s_` members). See below.
+  ready to save and edit; Settings has its options (also convert the file's own 32 px pictures; floor or wall item).
+  See below.
 - The room can be drawn on a transparent background (rendered on black and on white, alpha from the difference), and
   **Save picture** downloads it as a PNG.
 - **Undo and redo** (toolbar, Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y) for every change, the 64 and 32 px cast
