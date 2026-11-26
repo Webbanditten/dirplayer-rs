@@ -20,7 +20,7 @@ import { NewFurni, classNameProblem } from './components/NewFurni';
 import { createFurni, type NewFurniOptions } from './newfurni';
 import { makeShadow } from './shadow';
 import type { HabboPose } from './habbo';
-import { addHangLayer, listLayer, needsHangLayer, readData, stateCount } from './layers';
+import { addHangLayer, keepLeftWallPictures, listLayer, needsHangLayer, needsLeftWallPictures, readData, stateCount } from './layers';
 import { Icon, Logo } from './components/Icon';
 
 /** How a change joins the undo history: `group` merges edits in a row (a painting session, arrow-key nudges);
@@ -76,6 +76,8 @@ function makeHangable(...docs: (CastDocument | null | undefined)[]): boolean {
   let did = false;
   for (const d of docs) {
     if (!d) continue;
+    // first the walls the hotel's way round (left wall pictures, mirrored for the right wall), then the first layer
+    if (needsLeftWallPictures(new Furni(d))) keepLeftWallPictures(d, new Furni(d));
     const f = new Furni(d);
     if (needsHangLayer(f)) {
       addHangLayer(d, f);
@@ -1026,6 +1028,7 @@ export function App() {
     else if (i.fix === 'small') switchSize(true);
     else if (i.fix === 'rename') askName();
     else if (i.fix === 'hang') hang();
+    else if (i.fix === 'walls') turnWalls();
   };
 
   /** Dragging in the room: the pictures' registration points follow the mouse (a mirrored picture the other way). */
@@ -1040,6 +1043,17 @@ export function App() {
   };
 
   /** The shadow, in the shown cast and in the other size when it's open. */
+  /** A wall item that keeps the right wall's pictures gets the left wall's instead, as the hotel's are (both sizes). */
+  const turnWalls = () => {
+    if (!doc || !furni) return;
+    let summary = '';
+    edit('Turned its walls round', () => {
+      summary = keepLeftWallPictures(doc, furni);
+      const o = other ? new Furni(other.doc) : null;
+      if (other && o && needsLeftWallPictures(o)) keepLeftWallPictures(other.doc, o);
+    }, { both: true });
+    if (summary) setStatus(summary);
+  };
   /** A wall item whose first picture doesn't fit a wall gets a first layer the hotel can hang it by (both sizes). */
   const hang = () => {
     if (!doc || !furni) return;

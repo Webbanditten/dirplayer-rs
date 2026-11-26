@@ -9,9 +9,10 @@ import { gridModel } from './components/FurniGrid';
 import type { SideKey } from './history';
 import { wallHeightFor } from './room';
 import { canPlaceAnywhere } from './wallplace';
+import { needsLeftWallPictures } from './layers';
 
 export type Level = 'error' | 'warning' | 'info';
-export type Fix = 'icon' | 'small' | 'rename' | 'shadow' | 'hang';
+export type Fix = 'icon' | 'small' | 'rename' | 'shadow' | 'hang' | 'walls';
 
 export interface Issue {
   level: Level;
@@ -187,6 +188,10 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
   const odd = dirs.filter((d) => d % 2);
   if (odd.length) push('warning', `Direction${odd.length > 1 ? 's' : ''} ${odd.join(', ')}: the client turns furni to 0, 2, 4 and 6 only`);
 
+  // A wall item that keeps the right wall's pictures only shows the wrong way round while it is carried.
+  if (wall && needsLeftWallPictures(furni)) {
+    push('warning', `Carried in the hotel this shows the wrong way round (the right wall's look over the left wall and the other way about): its left wall pictures are the right wall's mirrored. The hotel's own wall items keep the left wall's pictures and mirror them for the right wall, and the hand counts on that`, undefined, 'walls');
+  }
   // A wall item the client finds no spot for on a guest room's wall can't be hung by anyone (wallplace.ts).
   if (wall) {
     const tile = small ? 32 : 64;

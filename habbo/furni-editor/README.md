@@ -101,6 +101,13 @@ its pair is opened and made again.
   116 px plus half its width high), and the registration point has to be on a wall. The item shows solid where it can
   go and faint where it can't, with the reason, the wall part the place is counted from and the `:w=x,y l=x,y l|r`
   the client would send. Click puts it down.
+- **Which wall a wall item keeps its pictures for** (`src/layers.ts` `keepLeftWallPictures`): the left wall's, mirrored
+  for the right wall (`rightwall x=leftwall x*`), as every wall item of the hotel does that isn't drawn for both (68
+  of 123; none keeps only the right wall's). The client counts on it while the item is carried: the hand's mover copies
+  the sprites of the item's left wall look and from then on only switches `flipH` per wall, so an item whose left wall
+  look is itself a mirror image shows the right wall's picture over the left wall and the other way about until it
+  hangs. A Flash file drawn for the right wall is turned round on import (its pictures mirrored where they are
+  stored, registration point x = width - x); for an open cast Check warns with *Turn its walls round*.
 - **A wall item the hotel can hang** (`src/layers.ts` `addHangLayer`): the client tests only the first layer's
   picture, and a picture taller than the wall takes has no spot at all, so nobody can hang the item (it stays faint
   in the hand). Sulake's own tall wall items get round it with a first layer that fits and the tall picture in layer

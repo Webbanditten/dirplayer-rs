@@ -435,3 +435,82 @@ export function addHangLayer(doc: CastDocument, furni: Furni): string {
   }
   return `Added a first layer the hotel hangs it by: ${made.join(', ') || aliases.length + ' mirrored'}; the picture${letters.size > 1 ? 's' : ''} moved up a letter (a is now b${letters.size > 1 ? ', ...' : ''})`;
 }
+
+// ---------------------------------------------------------------- which wall a wall item keeps its pictures for
+
+const WALL_SIDE = /^(s_)?(left|right)wall (.+)$/i;
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** The right wall pictures the left wall only shows mirrored (`leftwall x=rightwall x*`), with the left wall name each
+ *  would have as a picture of its own. */
+function rightWallOnly(furni: Furni): { slot: number; name: string; left: string }[] {
+  const aliasSlot = furni.fieldSlot(ALIAS_INDEX);
+  if (!aliasSlot) return [];
+  const own = new Map(furni.members.filter((m) => m.type === 'bitmap').map((m) => [m.name.toLowerCase(), m]));
+  const out: { slot: number; name: string; left: string }[] = [];
+  for (const line of (furni.text(ALIAS_INDEX) ?? '').split(/\r?\n|\r/)) {
+    const eq = line.indexOf('=');
+    if (eq <= 0 || !line.trim().endsWith('*')) continue;
+    const from = line.slice(0, eq).trim(), to = line.slice(eq + 1).trim().slice(0, -1);
+    const a = WALL_SIDE.exec(from), b = WALL_SIDE.exec(to);
+    if (!a || !b || a[2].toLowerCase() !== 'left' || b[2].toLowerCase() !== 'right' || !sameName(a[3], b[3])) continue;
+    const m = own.get(to.toLowerCase());
+    if (m && !own.has(from.toLowerCase()) && !out.some((o) => o.slot === m.slot)) out.push({ slot: m.slot, name: m.name, left: from });
+  }
+  return out;
+}
+
+/** A wall item that keeps its pictures for the right wall and shows them mirrored on the left one. */
+export function needsLeftWallPictures(furni: Furni): boolean {
+  return isWallItem(furni) && rightWallOnly(furni).length > 0;
+}
+
+/**
+ * Keep a wall item's pictures for the left wall and mirror them for the right one, as every wall item of the hotel
+ * does that isn't drawn for both (68 of 123; none keeps the right wall's only).
+ *
+ * The client counts on it while the item is carried: the mover copies the sprites of the item as it comes out of the
+ * hand, which is its left wall look, and from then on only switches `flipH` when the wall changes (hh_room_utils
+ * Object Mover Class). When the left wall look is itself a mirror image (the client makes that with rotation and skew
+ * 180), the two add up: the item shows the right wall's picture over the left wall and the other way about, and only
+ * looks right once it hangs.
+ *
+ * So each such picture is mirrored where it is stored (its registration point with it: width - x), takes the left
+ * wall's name, and the alias lines turn round: `rightwall x=leftwall x*`. It looks the same on both walls as before.
+ */
+export function keepLeftWallPictures(doc: CastDocument, furni: Furni): string {
+  const turn = rightWallOnly(furni);
+  if (!turn.length) return 'Nothing to turn round: the left wall has its own pictures';
+  const leftOf = new Map(turn.map((t) => [t.name.toLowerCase(), t.left]));
+  for (const t of turn) {
+    const b = furni.bySlot.get(t.slot)?.bitmap;
+    if (!b) continue;
+    const { width: w, height: h } = b;
+    if (b.depth <= 8) {
+      const px = doc.bitmapIndices(t.slot), out = new Uint8Array(px.length);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = px[y * w + (w - 1 - x)];
+      doc.setBitmapIndexed(t.slot, out, w, h, w - b.regX, b.regY, 0);
+    } else {
+      const px = doc.rgba(t.slot), out = new Uint8Array(px.length);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out.set(px.subarray((y * w + (w - 1 - x)) * 4, (y * w + (w - 1 - x)) * 4 + 4), (y * w + x) * 4);
+      doc.setBitmap(t.slot, out, w, h, w - b.regX, b.regY, 'rgba', 0);
+    }
+    doc.setName(t.slot, t.left);
+  }
+  // Alias lines: what pointed at a turned picture points at its left wall name, mirrored the other way; the picture's
+  // own old name becomes the mirrored one.
+  const lines: string[] = turn.map((t) => `${t.name}=${t.left}*`);
+  for (const line of (furni.text(ALIAS_INDEX) ?? '').split(/\r?\n|\r/)) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const from = line.slice(0, eq).trim();
+    let to = line.slice(eq + 1).trim();
+    const star = to.endsWith('*');
+    if (star) to = to.slice(0, -1);
+    const left = leftOf.get(to.toLowerCase());
+    if (!left) lines.push(`${from}=${to}${star ? '*' : ''}`);
+    else if (!sameName(from, left)) lines.push(`${from}=${left}${star ? '' : '*'}`);
+  }
+  writeField(doc, furni, ALIAS_INDEX, lines.join('\n'));
+  return `The item keeps its pictures for the left wall now (${turn.length} mirrored where they are stored) and the right wall shows them mirrored, as the hotel's own wall items do`;
+}

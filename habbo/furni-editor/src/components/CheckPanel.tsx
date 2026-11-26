@@ -7,6 +7,7 @@ const FIX_LABEL: Record<Fix, string> = {
   rename: 'New from this…',
   shadow: 'Make shadow',
   hang: 'Make it hangable',
+  walls: 'Turn its walls round',
 };
 
 interface Props {
