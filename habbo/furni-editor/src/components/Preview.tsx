@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { Animator, FPS } from '../animation';
 import { furniSetup, isWallItem, ownDirections, rotateDirection, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
-import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, tileLoc, wallHeightFor, type Extra, type Placement, type RoomLayout } from '../room';
+import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, tileLoc, wallAnchor, wallHeightFor, type Extra, type Placement, type RoomLayout } from '../room';
+import { partOutline, tryPlace, wallParts } from '../wallplace';
 import { DEFAULT_FIGURE, habboDepth, habboRect, habboUrl, loadHabbo, type HabboPicture, type HabboPose } from '../habbo';
 import { tileSpan } from '../tiles';
 import { spriteRect } from '../furni';
@@ -130,6 +131,11 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
   const variants = [...hotel.map((f) => ({ label: `${f.sprite}: ${f.name}`, colour: f.colour })), ...extraColors];
   const [tick, setTick] = useState(0);
   const canvas = useRef<HTMLCanvasElement>(null);
+  // "try placing" (wall items): the item carried over the walls with the mouse, as the client's mover carries it
+  const [placing, setPlacing] = useState(false);
+  const [hand, setHand] = useState<{ x: number; y: number } | null>(null);
+  const [put, setPut] = useState(false);
+  const [handWall, setHandWall] = useState(2);
 
   // A small cast of its own (hh_furni_xx_s_...) always shows small; a cast with both sizes has the checkbox.
   const smallCast = useMemo(() => furni.isSmallCast(), [furni]);
@@ -147,7 +153,22 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
 
   // Where furni go: one in the middle, or every direction it has side by side; a wall item on its wall (with "all",
   // the left and the right wall at once).
+  const placingNow = placing && wallItem;
   const { room, placed } = useMemo(() => {
+    if (placingNow) {
+      // Two walls with room to carry the item along them, and around them for where it can't go.
+      const tile = useSmall ? 32 : 64;
+      const setup = furniSetup(furni, { direction: handWall, state, colors, shadow: false, small: useSmall });
+      const layers = setup?.layersAt() ?? [];
+      if (setup && layers.length) {
+        const widest = Math.max(...layers.map((l) => l.width)), tallest = Math.max(...layers.map((l) => l.height));
+        const span = Math.max(5, Math.ceil(widest / (tile / 2)) + 3);
+        const base = roomLayout({ cols: span, rows: span }, tile, wallHeightFor(tile));
+        const pad = Math.round(Math.max(tile, widest, tallest) / 2);
+        const room = { ...base, xOffset: base.xOffset + pad, yOffset: base.yOffset + pad, width: base.width + 2 * pad, height: base.height + 2 * pad };
+        return { room, placed: [{ setup, x: 0, y: 0, wall: { direction: setup.direction, drop: 0 }, animator: new Animator(setup.data, setup.letters, state) }] as Placed[] };
+      }
+    }
     if (wallItem) {
       const tile = useSmall ? 32 : 64;
       const dirs = allDirections ? (own.length ? own : [direction]) : [direction];
@@ -196,7 +217,25 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
     };
     const room = fitRoom(roomLayout({ cols, rows }, tile), placed.map((p) => ({ x: p.x, y: p.y, layers: [...p.setup.layersAt(), ...habboBoxes(p)] })));
     return { room, placed };
-  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own, wallItem, rev, pose, seat]);
+  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own, wallItem, rev, pose, seat, placingNow, handWall]);
+
+  // Carried with the mouse: where its registration point is, the rectangle the client tests, and the client's answer.
+  const attempt = useMemo(() => {
+    const layers = placingNow ? placed[0]?.setup.layersAt() ?? [] : [];
+    if (!layers.length) return null;
+    // the client goes by the item's first sprite: its first layer
+    const first = layers.reduce((a, b) => (b.order < a.order ? b : a));
+    const start = wallAnchor(room, 2, Math.round(room.wallHeight / 2));
+    const at = hand ?? { x: Math.round(start.locH), y: Math.round(start.locV) };
+    // from the member's registration point and size, not mirrored even when the picture is (as the client has it)
+    const box = { left: at.x - first.regX, top: at.y - first.regY, right: at.x - first.regX + first.width, bottom: at.y - first.regY + first.height };
+    return { at, box, result: tryPlace(room, box, at) };
+  }, [placingNow, placed, room, hand]);
+  // the wall under the hand decides which picture is shown, the left wall's or the right wall's
+  useEffect(() => {
+    const wall = attempt?.result.ok ? (attempt.result.wall === 'left' ? 2 : 4) : 0;
+    if (wall && wall !== handWall) setHandWall(wall);
+  }, [attempt, handWall]);
 
   // The Habbos in the room: beside the furni (standing), on each of its tiles (sitting, at most four) or on its first
   // tile (lying), turned like the furni.
@@ -255,7 +294,14 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
   // Draw now, and every 1/24 s while animating.
   useEffect(() => {
     const draw = () => {
-      const placements: Placement[] = placed.map((p) => ({ x: p.x, y: p.y, wall: p.wall, layers: p.setup.layersAt(p.animator.choice()), hidden }));
+      const placements: Placement[] = placed.map((p) => ({
+        x: p.x,
+        y: p.y,
+        wall: p.wall && attempt ? { ...p.wall, at: { locH: attempt.at.x, locV: attempt.at.y } } : p.wall,
+        ghost: attempt ? !attempt.result.ok : undefined,
+        layers: p.setup.layersAt(p.animator.choice()),
+        hidden,
+      }));
       layersNow.current = { room, layers: placements.flatMap((p) => p.layers.map((layer) => ({ layer, x: p.x, y: p.y, wall: p.wall }))) };
       const c = canvas.current;
       if (!c) return;
@@ -289,7 +335,18 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [doc, rev, placed, floorPixels, room, playing, moves, hidden, extras]);
+  }, [doc, rev, placed, floorPixels, room, playing, moves, hidden, extras, attempt]);
+
+  const carry = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (put) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setHand({ x: Math.floor(((e.clientX - r.left) / r.width) * room.width), y: Math.floor(((e.clientY - r.top) / r.height) * room.height) });
+  };
+  /** A click puts it down where the client would take it, or picks it up again. */
+  const putDown = () => {
+    if (put) setPut(false);
+    else if (attempt?.result.ok) setPut(true);
+  };
 
   /** The front-most layer under the mouse (the shadow only when asked for and nothing else is there). */
   const layerAt = (e: React.MouseEvent<HTMLCanvasElement>, withShadow = false) => {
@@ -435,16 +492,35 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
       </div>
       <div className="preview-stage" ref={stage}>
         {probe ? (
-          <canvas
-            ref={canvas}
-            tabIndex={moveMode ? 0 : undefined}
-            onClick={moveMode ? undefined : pick}
-            onMouseDown={startMove}
-            onKeyDown={nudge}
-            className={[transparent ? 'checker' : '', moveMode ? 'moving' : ''].filter(Boolean).join(' ') || undefined}
-            style={{ width: room.width * shownZoom, height: room.height * shownZoom }}
-            title={moveMode ? 'Drag the furni to place it on its tiles (Alt: only the layer under the mouse); the arrow keys move it by a pixel, with Shift by 8' : 'Click a layer to select its member'}
-          />
+          <div className="stage-canvas" style={{ width: room.width * shownZoom, height: room.height * shownZoom }}>
+            <canvas
+              ref={canvas}
+              tabIndex={moveMode && !attempt ? 0 : undefined}
+              onClick={attempt ? putDown : moveMode ? undefined : pick}
+              onMouseDown={attempt ? undefined : startMove}
+              onMouseMove={attempt ? carry : undefined}
+              onKeyDown={nudge}
+              className={[transparent ? 'checker' : '', moveMode && !attempt ? 'moving' : '', attempt ? 'placing' : ''].filter(Boolean).join(' ') || undefined}
+              style={{ width: room.width * shownZoom, height: room.height * shownZoom }}
+              title={attempt ? undefined : moveMode ? 'Drag the furni to place it on its tiles (Alt: only the layer under the mouse); the arrow keys move it by a pixel, with Shift by 8' : 'Click a layer to select its member'}
+            />
+            {attempt && (
+              <svg className="place-overlay" viewBox={`0 0 ${room.width} ${room.height}`}>
+                {wallParts(room).map((p) => {
+                  const on = attempt.result.part && attempt.result.part.wall === p.wall && attempt.result.part.x === p.x && attempt.result.part.y === p.y;
+                  return <polygon key={`${p.wall}${p.x},${p.y}`} className={on ? 'part on' : 'part'} points={partOutline(p).map((c) => c.join(',')).join(' ')} />;
+                })}
+                <rect className={attempt.result.rect.inside ? 'box ok' : 'box no'} x={attempt.box.left} y={attempt.box.top} width={attempt.box.right - attempt.box.left} height={attempt.box.bottom - attempt.box.top} />
+                <circle className={attempt.result.rect.upperOk ? 'corner ok' : 'corner no'} cx={attempt.result.rect.upper[0]} cy={attempt.result.rect.upper[1]} r={1.6} />
+                <circle className={attempt.result.rect.lowerOk ? 'corner ok' : 'corner no'} cx={attempt.result.rect.lower[0]} cy={attempt.result.rect.lower[1]} r={1.6} />
+                <g className={attempt.result.ok ? 'hand ok' : attempt.result.rect.inside ? 'hand no' : 'hand'}>
+                  <line x1={attempt.at.x - 6} y1={attempt.at.y + 0.5} x2={attempt.at.x + 7} y2={attempt.at.y + 0.5} />
+                  <line x1={attempt.at.x + 0.5} y1={attempt.at.y - 6} x2={attempt.at.x + 0.5} y2={attempt.at.y + 7} />
+                  <circle cx={attempt.at.x + 0.5} cy={attempt.at.y + 0.5} r={2.5} />
+                </g>
+              </svg>
+            )}
+          </div>
         ) : (
           wallItem ? (
             <p className="empty">No wall item layers found (layer a: <code>leftwall &lt;class&gt;_a_&lt;frame&gt;</code> or <code>rightwall …</code>, with a <code>&lt;class&gt;.data</code> listing the layers).</p>
@@ -453,8 +529,29 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], d
           )
         )}
       </div>
+      {attempt && (
+        <div className="place-note">
+          <p className={attempt.result.ok ? 'ok' : 'no'}>
+            {put
+              ? <>Placed at <code>{attempt.result.location}</code>. Click it to pick it up again.</>
+              : attempt.result.ok
+                ? <>It can go here: <code>{attempt.result.location}</code> ({attempt.result.wall} wall, part {attempt.result.part!.x},{attempt.result.part!.y}; the hand is {attempt.result.local![0]}, {attempt.result.local![1]} into it). Click to put it down.</>
+                : attempt.result.reason}
+          </p>
+          <p className="legend">
+            The cross is the hand: the first picture's registration point, which is where the item is placed. The dashed box is that picture's rectangle
+            as the hotel counts it (from the registration point, never mirrored): all of it has to be inside one wall, and the two dots are the corners the hotel checks.
+            The lit wall part is the one the place is counted from.
+          </p>
+        </div>
+      )}
       <div className="pane-foot preview-foot">
         {setMoveMode && onMove && <label className="chip" title="Drag the furni in the room to place it on its tiles (it moves its pictures' registration points). Alt-drag moves only the layer under the mouse"><input type="checkbox" checked={moveMode} onChange={(e) => setMoveMode(e.target.checked)} />move</label>}
+        {wallItem && (
+          <label className="chip" title="Carry the item over the walls with the mouse, as the hotel does when you place it: see where it can go, which point is in your hand and what has to fit on the wall">
+            <input type="checkbox" checked={placing} onChange={(e) => { setPlacing(e.target.checked); setPut(false); setHand(null); }} />try placing
+          </label>
+        )}
         {!wallItem && <label className="chip"><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />shadow</label>}
         <label className="chip"><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} />grid</label>
         {!wallItem && <label className="chip" title="Light up the tiles the furni stands on (as Odin counts them)"><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} />tiles</label>}

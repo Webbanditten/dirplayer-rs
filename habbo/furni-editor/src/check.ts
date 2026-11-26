@@ -7,6 +7,8 @@ import { ALIAS_INDEX, ASSET_INDEX, floorSetup, layerData, parseMemberName, wallS
 import { parseLingo, prop, type LingoValue } from './lingo';
 import { gridModel } from './components/FurniGrid';
 import type { SideKey } from './history';
+import { wallHeightFor } from './room';
+import { canPlaceAnywhere } from './wallplace';
 
 export type Level = 'error' | 'warning' | 'info';
 export type Fix = 'icon' | 'small' | 'rename' | 'shadow';
@@ -184,6 +186,23 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
   const dirs = [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
   const odd = dirs.filter((d) => d % 2);
   if (odd.length) push('warning', `Direction${odd.length > 1 ? 's' : ''} ${odd.join(', ')}: the client turns furni to 0, 2, 4 and 6 only`);
+
+  // A wall item the client finds no spot for on a guest room's wall can't be hung by anyone (wallplace.ts).
+  if (wall) {
+    const tile = small ? 32 : 64;
+    for (const d of [2, 4]) {
+      const setup = wallSetup(furni, { direction: d, state: 0, small, shadow: false });
+      const layers = setup?.direction === d ? setup.layersAt() : [];
+      if (!layers.length) continue;
+      const first = layers.reduce((a, b) => (b.order < a.order ? b : a));
+      if (canPlaceAnywhere(tile, first, d === 4 ? 'right' : 'left', /poster|photo|post\.it/i.test(own))) continue;
+      const most = wallHeightFor(tile) + Math.floor(first.width / 2);
+      const which = d === 4 ? 'right' : 'left';
+      push('warning', first.height >= most - 2
+        ? `The ${which} wall picture (${first.width} × ${first.height}) can't be hung in a guest room: all of it has to be on the wall, which takes at most ${most} px of height at that width (the wall's ${wallHeightFor(tile)} px plus half the picture's width). "try placing" under the room shows it`
+        : `The ${which} wall picture can't be hung in a guest room: its registration point (${first.regX}, ${first.regY}) is so far from the picture that the two are never on the wall together, and the hotel places a wall item by that point. "try placing" under the room shows it`, first.slot);
+    }
+  }
 
   // Layers the client never draws, in any direction or state.
   const data = (() => {

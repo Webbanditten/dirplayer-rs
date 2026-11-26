@@ -491,6 +491,25 @@ label.chip:has(input:focus-visible) { outline: 2px solid var(--ring); outline-of
 .nf-slot-foot { display: flex; align-items: center; gap: 6px; }
 .start-card.featured { border-color: var(--ring); background: linear-gradient(180deg, var(--accent-soft), transparent 70%), var(--raised); }
 .preview-stage canvas.moving { cursor: move; outline: none; }
+/* "try placing": a wall item carried over the walls, with what the hotel tests drawn over it */
+.stage-canvas { position: relative; flex: none; }
+.preview-stage canvas.placing { cursor: none; }
+.place-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.place-overlay .part { fill: none; stroke: rgba(255, 255, 255, 0.3); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.place-overlay .part.on { fill: rgba(96, 200, 255, 0.2); stroke: #6cd3ff; }
+.place-overlay .box { fill: none; stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.place-overlay .box.ok, .place-overlay .hand.ok { stroke: #63d483; }
+.place-overlay .box.no, .place-overlay .hand.no { stroke: #ff6b6b; }
+.place-overlay .corner.ok { fill: #63d483; }
+.place-overlay .corner.no { fill: #ff6b6b; }
+.place-overlay .hand { stroke: #ffd24a; fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.place-note { padding: 6px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+.place-note p { margin: 0; }
+/* two lines whatever it says, so the room doesn't move under the mouse */
+.place-note p:first-child { min-height: 2.9em; }
+.place-note .ok { color: #63d483; }
+.place-note .no { color: #ff8a8a; }
+.place-note .legend { color: var(--muted); }
 .preview-stage canvas.moving:focus-visible { box-shadow: 0 0 0 2px var(--ring); }
 .segmented .follows { align-self: center; padding: 0 8px 0 4px; font-size: 11px; color: var(--accent-text); }
 .segmented button.refresh { padding: 0 6px; }

@@ -60,8 +60,8 @@ export function wallAnchor(room: RoomLayout, direction: number, drop: number) {
 }
 
 /** Where a placement's sprites hang from: its wall point, or its tile. */
-export function placementLoc(room: RoomLayout, p: { x: number; y: number; wall?: { direction: number; drop: number } }) {
-  return p.wall ? wallAnchor(room, p.wall.direction, p.wall.drop) : tileLoc(room, p.x, p.y);
+export function placementLoc(room: RoomLayout, p: { x: number; y: number; wall?: { direction: number; drop: number; at?: { locH: number; locV: number } } }) {
+  return p.wall ? p.wall.at ?? wallAnchor(room, p.wall.direction, p.wall.drop) : tileLoc(room, p.x, p.y);
 }
 
 /** Grow the canvas so every sprite of `placements` (plus a margin) fits, moving the floor along. */
@@ -173,8 +173,11 @@ export function drawFloor(room: RoomLayout, style: FloorStyle): Uint8Array {
 export interface Placement {
   x: number;
   y: number;
-  /** a wall item: hangs from its wall (direction 2 left, 4 right), `drop` pixels below the wall's top */
-  wall?: { direction: number; drop: number };
+  /** a wall item: hangs from its wall (direction 2 left, 4 right), `drop` pixels below the wall's top; or with its
+   *  registration point at `at` (carried with the mouse: wallplace.ts) */
+  wall?: { direction: number; drop: number; at?: { locH: number; locV: number } };
+  /** carried and not placeable here: drawn as the client does it, 30 % solid (its light layers not at all) */
+  ghost?: boolean;
   layers: Layer[];
   /** layers to leave out, by letter */
   hidden?: Set<string>;
@@ -217,7 +220,7 @@ export function sprites(room: RoomLayout, placements: Placement[]): SpriteSpec[]
         top: r.top,
         flipH: l.flip,
         ink: l.ink,
-        blend: l.blend,
+        blend: p.ghost ? (l.ink === 33 ? 0 : 30) : l.blend,
         bgColor: l.bgColor === undefined ? undefined : [(l.bgColor >> 16) & 255, (l.bgColor >> 8) & 255, l.bgColor & 255],
       });
     }

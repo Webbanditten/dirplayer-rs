@@ -93,6 +93,14 @@ its pair is opened and made again.
 - **Autosave**: while a cast has unsaved changes, both casts are kept in this browser's IndexedDB (2 s after the last
   change); after a reload or a crash the start page offers to restore them. Cleared once everything is saved or
   published. The undo history isn't kept.
+- **Try placing** (wall items, under the room): carry the item over two walls with the mouse as the hotel does when
+  you hang it (`src/wallplace.ts`, from the client's Object Mover Class and `fitRectToWall`). The cross is the hand: the
+  first picture's registration point, which is where the item is placed. The dashed box is that picture's rectangle
+  as the client counts it (from the registration point, never mirrored), with the two corners it checks. Two tests
+  decide: the whole rectangle has to be inside one wall (a wall is a 116 px band at 64 px, so a picture can be at most
+  116 px plus half its width high), and the registration point has to be on a wall. The item shows solid where it can
+  go and faint where it can't, with the reason, the wall part the place is counted from and the `:w=x,y l=x,y l|r`
+  the client would send. Click puts it down. Check warns about a wall picture no spot takes.
 - **Check furni** (toolbar; the badge counts errors, else warnings): Housekeeping's rules (lower-case class, bitmaps,
   fields and palettes only, no scripts, only the furni's own member names, asset.index's `#id` and classes, alias lines
   naming only the furni's own members), and what the client would draw differently: aliases to members that aren't
