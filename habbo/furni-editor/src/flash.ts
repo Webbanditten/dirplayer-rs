@@ -76,6 +76,12 @@ export interface FlashOptions {
   small: boolean;
   /** floor furni or a wall item; 'auto' (the default) decides from the logic depth and the directions */
   kind?: 'auto' | 'floor' | 'wall';
+  /**
+   * Transition animations (ids 100 and up, `transitionTo`): Flash plays one on the way into a state (a countdown
+   * before the fireworks). The 2007 client's furni classes play none, so they are left out ('skip', the default) or
+   * become states of their own in front of the state they lead to ('states': a click steps off, countdown, on).
+   */
+  transitions?: 'skip' | 'states';
 }
 
 /** Whether a Flash furni is a wall item: wall-thin (logic depth y < 1) and drawn only for directions 2 and 4 (left and
@@ -316,20 +322,33 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
     fields.push({ name: `${pre}${sprite}.props`, text: `[${props.join(', ')}]` });
 
     // .data
-    const anims = Array.from(vis.querySelectorAll('animations > animation'))
-      .map((a) => ({ el: a, id: num(a, 'id') ?? 0 }))
-      .filter((a) => {
-        if (a.id >= 100) warnings.push(`Animation ${a.id} (a transition) left out`);
-        return a.id < 100;
-      });
+    const allAnims = Array.from(vis.querySelectorAll('animations > animation')).map((a) => ({ el: a, id: num(a, 'id') ?? 0, to: num(a, 'transitionTo') }));
+    const anims = allAnims.filter((a) => a.id < 100);
+    const transitions = allAnims.filter((a) => a.id >= 100);
+    const asStates = options.transitions === 'states';
+    for (const t of transitions) {
+      warnings.push(asStates && t.to !== undefined
+        ? `Animation ${t.id} (the transition to state ${t.to + 1}) is a state of its own, in front of it`
+        : `Animation ${t.id} (a transition) left out (Settings can bring transitions in as states of their own)`);
+    }
     if (anims.length || (wall && usedLetters.length)) {
-      const states = anims.length ? Math.max(...anims.map((a) => a.id)) + 1 : 1;
+      const count = anims.length ? Math.max(...anims.map((a) => a.id)) + 1 : 1;
+      // The states in the order a click steps through them: each one after the transitions that lead into it, the
+      // ones back to the first state last.
+      const order: (Element | undefined)[] = [];
+      const into = (s: number) => (asStates ? transitions.filter((t) => t.to === s).map((t) => t.el) : []);
+      for (let s = 0; s < count; s++) {
+        if (s > 0) order.push(...into(s));
+        order.push(anims.find((a) => a.id === s)?.el);
+      }
+      order.push(...into(0));
+      const states = order.length;
       const lines: string[] = [];
       for (const letter of usedLetters) {
         const id = LETTERS.indexOf(letter);
         const perState: string[] = [];
         for (let s = 0; s < states; s++) {
-          const al = anims.find((a) => a.id === s)?.el.querySelector(`animationLayer[id="${id}"]`);
+          const al = order[s]?.querySelector(`animationLayer[id="${id}"]`);
           const seqs = al ? Array.from(al.querySelectorAll('frameSequence')) : [];
           const frames = seqs.flatMap((seq) => Array.from(seq.querySelectorAll('frame')).map((f) => num(f, 'id') ?? 0));
           const parts: string[] = [];

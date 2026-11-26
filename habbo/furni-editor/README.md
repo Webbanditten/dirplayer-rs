@@ -223,7 +223,14 @@ container and chunk layout are Director's. Checked: chair_norja.swf gives Sulake
 and registration points, same aliases and zshift); rare_dragonlamp, tv_flat and ads_calip_lava look like the hotel's
 casts in the preview, and the converted lava lamp, dragon lamp and sofa load and draw in the web client.
 
-Not converted: transition animations (ids 100+), Flash inks without a
+Transition animations (ids 100 and up, `transitionTo`): Flash plays one on the way into a state, such as year2027's
+countdown before its fireworks. The 2007 client's furni classes play none (a state is one frame list per layer, once
+or looped), so they are left out, with a note. With *transitions as states of their own* in Settings each becomes a
+state in front of the one it leads to (transitions back to the first state come last): a click steps off, countdown,
+fireworks. It plays once and stays on its last frame until the next click. Off by default, because a lamp that fades
+in and out would need four clicks for a round.
+
+Not converted: Flash inks without a
 Shockwave equivalent (MULTIPLY, SCREEN; reported in the status line).
 
 ## Rules it follows
