@@ -208,7 +208,7 @@ container and chunk layout are Director's. Checked: chair_norja.swf gives Sulake
 and registration points, same aliases and zshift); rare_dragonlamp, tv_flat and ads_calip_lava look like the hotel's
 casts in the preview, and the converted lava lamp, dragon lamp and sofa load and draw in the web client.
 
-Not converted: wall items (their `leftwall`/`rightwall` naming), transition animations (ids 100+), Flash inks without a
+Not converted: transition animations (ids 100+), Flash inks without a
 Shockwave equivalent (MULTIPLY, SCREEN; reported in the status line).
 
 ## Rules it follows
