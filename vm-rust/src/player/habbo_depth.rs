@@ -324,7 +324,7 @@ fn instance_named(player: &DirPlayer, id: Option<u32>, name: &str) -> Option<u32
     None
 }
 
-fn find_instances(player: &DirPlayer) -> Option<(u32, u32)> {
+pub(crate) fn find_instances(player: &DirPlayer) -> Option<(u32, u32)> {
     FOUND.with(|f| {
         let mut f = f.borrow_mut();
         let c = instance_named(player, f.component, "Room Component Class");
@@ -354,7 +354,7 @@ fn find_instances(player: &DirPlayer) -> Option<(u32, u32)> {
 }
 
 /// A property of an instance or its ancestors.
-fn prop<'a>(player: &'a DirPlayer, inst: &'a ScriptInstance, name: &str) -> Option<&'a Datum> {
+pub(crate) fn prop<'a>(player: &'a DirPlayer, inst: &'a ScriptInstance, name: &str) -> Option<&'a Datum> {
     let sym = Symbol::from_str(name);
     let mut cur = inst;
     loop {
@@ -374,14 +374,14 @@ fn num(d: Option<&Datum>) -> Option<f64> {
     }
 }
 
-fn list<'a>(player: &'a DirPlayer, d: Option<&'a Datum>) -> Vec<&'a Datum> {
+pub(crate) fn list<'a>(player: &'a DirPlayer, d: Option<&'a Datum>) -> Vec<&'a Datum> {
     match d {
         Some(Datum::List(_, items, _)) => items.iter().map(|r| player.allocator.get_datum(r)).collect(),
         _ => Vec::new(),
     }
 }
 
-fn instances<'a>(player: &'a DirPlayer, d: Option<&'a Datum>) -> Vec<&'a ScriptInstance> {
+pub(crate) fn instances<'a>(player: &'a DirPlayer, d: Option<&'a Datum>) -> Vec<&'a ScriptInstance> {
     let values: Vec<&Datum> = match d {
         Some(Datum::PropList(pairs, _)) => pairs.iter().map(|(_, v)| player.allocator.get_datum(v)).collect(),
         Some(Datum::List(_, items, _)) => items.iter().map(|r| player.allocator.get_datum(r)).collect(),
@@ -426,7 +426,7 @@ fn drawn_rect(player: &DirPlayer, sprite: &Sprite) -> IntRect {
     IntRect { left: l.round() as i32, top: t.round() as i32, right: r.round() as i32, bottom: b.round() as i32 }
 }
 
-fn sprite_ref(d: Option<&Datum>) -> Option<usize> {
+pub(crate) fn sprite_ref(d: Option<&Datum>) -> Option<usize> {
     match d? {
         Datum::SpriteRef(n) if *n > 0 => Some(*n as usize),
         _ => None,

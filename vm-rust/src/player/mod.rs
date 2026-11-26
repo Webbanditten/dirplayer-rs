@@ -28,6 +28,7 @@ pub mod font;
 pub mod geometry;
 pub mod gif;
 pub mod habbo_depth;
+pub mod habbo_hit;
 pub mod handlers;
 pub mod interp_stats;
 pub mod js_lingo;

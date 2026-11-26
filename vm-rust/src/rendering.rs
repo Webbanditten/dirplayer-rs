@@ -1825,6 +1825,7 @@ pub fn render_score_to_bitmap_with_offset(
 ) {
     if matches!(score_source, ScoreRef::Stage) {
         crate::player::habbo_depth::refresh(player);
+        crate::player::habbo_hit::refresh(player);
     }
     let palettes = player.movie.cast_manager.palettes();
 

@@ -5531,6 +5531,10 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
         if transformed_x >= rect.left && transformed_x < rect.right
             && transformed_y >= rect.top && transformed_y < rect.bottom
         {
+            // Habbo fork: a room furni's sprite isn't under the mouse where its picture shows nothing.
+            if crate::player::habbo_hit::see_through(player, sprite, &rect, transformed_x, transformed_y) {
+                return false;
+            }
             return matte_pixel_hit_test(player, sprite, &rect, transformed_x, transformed_y);
         }
         return false;
@@ -5541,6 +5545,9 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
     let right = rect.right;
     let bottom = rect.bottom;
     if x >= left && x < right && y >= top && y < bottom {
+        if crate::player::habbo_hit::see_through(player, sprite, &rect, x, y) {
+            return false;
+        }
         return matte_pixel_hit_test(player, sprite, &rect, x, y);
     }
     false
