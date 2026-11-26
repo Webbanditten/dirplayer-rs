@@ -214,9 +214,23 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
     const lacks = aDirs.filter((d) => !r.dirs.has(d));
     if (r.letter !== 'a' && lacks.length && lacks.length < aDirs.length) {
       const first = [...r.dirs.values()][0]?.values().next().value;
+      // What goes with it: the client makes a furni's sprites letter by letter and stops at the first one without a
+      // picture, so the layers after it aren't drawn in that direction either (hh_furni_xx_rare_icecream_campaign2
+      // shows only its lever in direction 4: its layer b picture there is named after another furni).
+      const lost = new Set<string>();
+      if (!wall && !r.dirs.has(0)) {
+        for (const d of lacks) {
+          const shown = new Set(floorSetup(furni, { direction: d, state: 0, small, shadow: false })?.layersAt().map((l) => l.letter) ?? []);
+          for (const o of g.rows) if (o.letter > r.letter && o.dirs.has(d) && !shown.has(o.letter)) lost.add(o.letter);
+        }
+      }
+      const letters = [...lost].sort();
+      const also = letters.length
+        ? `, and the client stops at the first layer without a picture: ${letters.length > 1 ? `layers ${letters.slice(0, -1).join(', ')} and ${letters[letters.length - 1]} aren't` : `layer ${letters[0]} isn't`} drawn there either`
+        : '';
       push('warning', wall
         ? `Layer ${r.letter} has no picture for the ${lacks.map((d) => (d === 4 ? 'right' : 'left')).join(' and ')} wall (layer a has): it's missing there`
-        : `Layer ${r.letter} has no picture for direction ${lacks.join(', ')} (layer a has): ${r.dirs.has(0) ? 'the client shows its direction 0 picture there' : "it's missing there"}`, first?.slot);
+        : `Layer ${r.letter} has no picture for direction ${lacks.join(', ')} (layer a has): ${r.dirs.has(0) ? 'the client shows its direction 0 picture there' : `it's missing there${also}`}`, first?.slot);
     }
     for (const [d, frames] of r.dirs) {
       const nums = [...frames.keys()].sort((a, b) => a - b);
