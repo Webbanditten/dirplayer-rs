@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { Animator, FPS } from '../animation';
 import { furniSetup, isWallItem, ownDirections, rotateDirection, stateNames, type FloorSetup, type Furni, type Layer } from '../furni';
-import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, wallHeightFor, type Placement, type RoomLayout } from '../room';
+import { composite, drawFloor, fitRoom, footprint, placementLoc, roomLayout, tileLoc, wallHeightFor, type Extra, type Placement, type RoomLayout } from '../room';
+import { DEFAULT_FIGURE, habboDepth, habboRect, habboUrl, loadHabbo, type HabboPicture, type HabboPose } from '../habbo';
+import { tileSpan } from '../tiles';
 import { spriteRect } from '../furni';
 import { download, encodePng } from '../wasm';
 
@@ -34,9 +36,34 @@ interface Props {
   onPick: (slot: number) => void;
   /** part colour variants from elsewhere (an imported Flash file), used when the hotel has none for the class */
   extraColors?: { label: string; colour: string }[];
-  /** the view (direction, state, colours) as it changes: the icon is made from it */
-  onView?: (view: { direction: number; state: number; colors: string }) => void;
+  /** the view: the direction it is turned to, the state (0-based) and the part colours (items_definitions.colour) */
+  direction: number;
+  setDirection: (d: number) => void;
+  state: number;
+  setState: (s: number) => void;
+  colors: string;
+  setColors: (c: string) => void;
   onMakeIcon?: (view: { direction: number; state: number; colors: string }) => void;
+  /** a Habbo in the room: standing beside the furni, sitting or lying on it; `seat` is the seat's height (the
+   *  definition's top_height) it sits or lies at */
+  pose: HabboPose;
+  setPose: (p: HabboPose) => void;
+  seat: number;
+  setSeat: (h: number) => void;
+  /** the hotel's website, for its Habbo pictures */
+  site: string;
+  /** move mode: dragging in the room moves pictures (their registration points) instead of selecting them */
+  moveMode?: boolean;
+  setMoveMode?: (on: boolean) => void;
+  /** the pictures to move, with the registration points they had when the drag began, and how far (room pixels) */
+  onMove?: (targets: MoveTarget[], dx: number, dy: number, whole: boolean) => void;
+}
+
+export interface MoveTarget {
+  slot: number;
+  flip: boolean;
+  regX: number;
+  regY: number;
 }
 
 interface HotelFurni {
@@ -55,12 +82,9 @@ interface Placed {
   animator: Animator;
 }
 
-export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], onView, onMakeIcon }: Props) {
-  const [direction, setDirection] = useState(2);
-  const [state, setState] = useState(0);
+export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], direction, setDirection, state, setState, colors, setColors, onMakeIcon, pose, setPose, seat, setSeat, site, moveMode = false, setMoveMode, onMove }: Props) {
   const [playing, setPlaying] = useState(true);
   const [shadow, setShadow] = useState(true);
-  const [colors, setColors] = useState('');
   const [allDirections, setAllDirections] = useState(false);
   const [zoom, setZoom] = useState(0);
   const [stageWidth, setStageWidth] = useState(600);
@@ -111,9 +135,6 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
   const probe = useMemo(() => furniSetup(furni, { direction, state, colors, shadow, small: useSmall }), [furni, direction, state, colors, shadow, useSmall, rev]);
   const states = probe ? stateNames(probe.data) : ['default'];
   const shownDirection = probe?.direction ?? direction;
-  useEffect(() => {
-    onView?.({ direction: shownDirection, state, colors });
-  }, [shownDirection, state, colors]);
   const own = useMemo(() => ownDirections(furni, useSmall), [furni, useSmall]);
   // Stay on directions the furni has: 2 when it has it, else its first.
   useEffect(() => {
@@ -156,18 +177,73 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
       if (!setup) return;
       placed.push({ setup, x: 1 + (allDirections ? i * span : 0), y: 1, animator: new Animator(setup.data, setup.letters, state) });
     });
-    const room = fitRoom(roomLayout({ cols, rows }, useSmall ? 32 : 64), placed.map((p) => ({ x: p.x, y: p.y, layers: p.setup.layersAt() })));
+    // Room for the Habbo too: its canvas over each tile it can be on (64 x 110 above the tile point, lifted by the seat).
+    const tile = useSmall ? 32 : 64;
+    const habboBoxes = (p: Placed): Layer[] => {
+      if (pose === 'none') return [];
+      const [w, l] = tileSpan(p.setup.dims, p.setup.direction);
+      const tiles = pose === 'stand' ? [[0, l]] : pose === 'lay' ? [[0, 0]] : Array.from({ length: w * l }, (_, k) => [k % w, Math.floor(k / w)]);
+      const lift = pose === 'stand' ? 0 : Math.round((seat - 1) * (tile / 2));
+      return tiles.map(([i, j]) => ({
+        name: 'habbo', letter: 'habbo', slot: 0, flip: false, ink: 0, blend: 100, z: 0, order: 0, shiftX: 0, shiftY: 0, xFactor: tile,
+        width: pose === 'lay' ? Math.round(tile * 1.5) : tile, height: Math.round(tile * 1.75),
+        regX: -((i - j) * tile) / 2, regY: Math.round(tile * 1.6) + lift - ((i + j) * tile) / 4,
+      }));
+    };
+    const room = fitRoom(roomLayout({ cols, rows }, tile), placed.map((p) => ({ x: p.x, y: p.y, layers: [...p.setup.layersAt(), ...habboBoxes(p)] })));
     return { room, placed };
-  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own, wallItem, rev]);
+  }, [furni, direction, state, colors, shadow, allDirections, useSmall, probe, own, wallItem, rev, pose, seat]);
+
+  // The Habbos in the room: beside the furni (standing), on each of its tiles (sitting, at most four) or on its first
+  // tile (lying), turned like the furni.
+  const habbos = useMemo(() => {
+    if (pose === 'none' || wallItem) return [];
+    const out: { x: number; y: number; direction: number }[] = [];
+    for (const p of placed) {
+      const [w, l] = tileSpan(p.setup.dims, p.setup.direction);
+      if (pose === 'stand') out.push({ x: p.x, y: p.y + l, direction: 2 });
+      else if (pose === 'lay') out.push({ x: p.x, y: p.y, direction: p.setup.direction });
+      else {
+        for (let i = 0; i < w; i++) for (let j = 0; j < l; j++) if (out.length < 4 * placed.length) out.push({ x: p.x + i, y: p.y + j, direction: p.setup.direction });
+      }
+    }
+    return out;
+  }, [placed, pose, wallItem]);
+  const [pictures, setPictures] = useState<Map<number, HabboPicture | null>>(new Map());
+  const [habboFailed, setHabboFailed] = useState(false);
+  useEffect(() => {
+    if (pose === 'none') return;
+    let live = true;
+    const dirs = [...new Set(habbos.map((h) => h.direction))];
+    Promise.all(dirs.map((d) => loadHabbo(habboUrl(site, DEFAULT_FIGURE, pose, d, useSmall)))).then((list) => {
+      if (!live) return;
+      setPictures(new Map(dirs.map((d, i) => [d, list[i]])));
+      setHabboFailed(list.some((p) => !p));
+    });
+    return () => {
+      live = false;
+    };
+  }, [habbos, pose, useSmall, site]);
+  const extras: Extra[] = useMemo(() => {
+    if (pose === 'none') return [];
+    const out: Extra[] = [];
+    for (const h of habbos) {
+      const picture = pictures.get(h.direction);
+      if (!picture) continue;
+      const { locH, locV } = tileLoc(room, h.x, h.y);
+      out.push({ picture, ...habboRect(pose, useSmall, picture, locH, locV, seat, h.direction), z: habboDepth(h.x + h.y, pose) });
+    }
+    return out;
+  }, [habbos, pictures, room, pose, seat, useSmall]);
 
   const floorPixels = useMemo(() => {
     const highlight = new Set<string>();
-    if (showFootprint && !wallItem) for (const p of placed) footprint(p.x, p.y, p.setup.dims, p.setup.direction).forEach((t) => highlight.add(t));
+    if ((showFootprint || moveMode) && !wallItem) for (const p of placed) footprint(p.x, p.y, p.setup.dims, p.setup.direction).forEach((t) => highlight.add(t));
     const style = { floor, grid, highlight };
     return transparent
       ? { black: drawFloor(room, { ...style, background: '#000000' }), white: drawFloor(room, { ...style, background: '#ffffff' }) }
       : { black: drawFloor(room, { ...style, background }), white: undefined };
-  }, [room, placed, floor, background, grid, showFootprint, transparent]);
+  }, [room, placed, floor, background, grid, showFootprint, moveMode, transparent]);
 
   const moves = placed.some((p) => p.animator.moves);
   const layersNow = useRef<{ room: RoomLayout; layers: { layer: Layer; x: number; y: number; wall?: Placed['wall'] }[] }>({ room, layers: [] });
@@ -182,7 +258,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
       c.width = room.width;
       c.height = room.height;
       try {
-        c.getContext('2d')!.putImageData(composite(doc, room, floorPixels.black, placements, floorPixels.white), 0, 0);
+        c.getContext('2d')!.putImageData(composite(doc, room, floorPixels.black, placements, floorPixels.white, extras), 0, 0);
       } catch (e) {
         console.error(e);
       }
@@ -209,22 +285,86 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [doc, rev, placed, floorPixels, room, playing, moves, hidden]);
+  }, [doc, rev, placed, floorPixels, room, playing, moves, hidden, extras]);
 
-  const pick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  /** The front-most layer under the mouse (the shadow only when asked for and nothing else is there). */
+  const layerAt = (e: React.MouseEvent<HTMLCanvasElement>, withShadow = false) => {
     const r = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width) * room.width;
     const y = ((e.clientY - r.top) / r.height) * room.height;
     const { layers } = layersNow.current;
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const { layer } = layers[i];
-      const { locH, locV } = placementLoc(room, layers[i]);
-      const s = spriteRect(layer, locH, locV);
-      if (x >= s.left && x < s.left + layer.width && y >= s.top && y < s.top + layer.height && layer.letter !== 'sd') {
-        onPick(layer.slot);
-        return;
+    for (const shadows of withShadow ? [false, true] : [false]) {
+      for (let i = layers.length - 1; i >= 0; i--) {
+        const { layer } = layers[i];
+        if ((layer.letter === 'sd') !== shadows) continue;
+        const { locH, locV } = placementLoc(room, layers[i]);
+        const s = spriteRect(layer, locH, locV);
+        if (x >= s.left && x < s.left + layer.width && y >= s.top && y < s.top + layer.height) return layers[i];
       }
     }
+    return null;
+  };
+  const pick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const hit = layerAt(e);
+    if (hit) onPick(hit.layer.slot);
+  };
+
+  // Move mode: drag the furni (every layer of the one under the mouse, not its shadow) or, with Alt, one layer; the
+  // arrow keys move what was last dragged by a pixel.
+  const drag = useRef<{ targets: MoveTarget[]; whole: boolean; x: number; y: number; dx: number; dy: number } | null>(null);
+  const lastMoved = useRef<{ slots: number[]; whole: boolean } | null>(null);
+  const targetsOf = (slots: Set<number> | null, at: { x: number; y: number; wall?: Placed['wall'] }): MoveTarget[] =>
+    layersNow.current.layers
+      .filter((l) => l.x === at.x && l.y === at.y && l.wall?.direction === at.wall?.direction && (slots ? slots.has(l.layer.slot) : l.layer.letter !== 'sd'))
+      .map((l) => ({ slot: l.layer.slot, flip: l.layer.flip, regX: l.layer.regX, regY: l.layer.regY }));
+  const startMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!moveMode || !onMove || e.button !== 0) return;
+    const hit = layerAt(e, true);
+    if (!hit) return;
+    e.preventDefault();
+    e.currentTarget.focus();
+    const one = e.altKey || hit.layer.letter === 'sd';
+    const targets = targetsOf(one ? new Set([hit.layer.slot]) : null, hit);
+    drag.current = { targets, whole: !one, x: e.clientX, y: e.clientY, dx: 0, dy: 0 };
+    lastMoved.current = { slots: targets.map((t) => t.slot), whole: !one };
+    onPick(hit.layer.slot);
+  };
+  const scale = () => {
+    const c = canvas.current;
+    return c ? c.getBoundingClientRect().width / Math.max(1, c.width) : 1;
+  };
+  useEffect(() => {
+    if (!moveMode) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const dx = Math.round((e.clientX - d.x) / scale()), dy = Math.round((e.clientY - d.y) / scale());
+      if (dx === d.dx && dy === d.dy) return;
+      d.dx = dx;
+      d.dy = dy;
+      onMove?.(d.targets, dx, dy, d.whole);
+    };
+    const onMouseUp = () => {
+      drag.current = null;
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  });
+  const nudge = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const k = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[e.key];
+    if (!k || !moveMode || !onMove) return;
+    e.preventDefault();
+    const { layers } = layersNow.current;
+    const want = lastMoved.current;
+    const first = layers.find((l) => (want ? want.slots.includes(l.layer.slot) : l.layer.letter !== 'sd'));
+    if (!first) return;
+    const targets = targetsOf(want ? new Set(want.slots) : null, first);
+    const by = e.shiftKey ? 8 : 1;
+    onMove(targets, k[0] * by, k[1] * by, want?.whole ?? true);
   };
 
   useEffect(() => {
@@ -285,7 +425,16 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
       </div>
       <div className="preview-stage" ref={stage}>
         {probe ? (
-          <canvas ref={canvas} onClick={pick} className={transparent ? 'checker' : undefined} style={{ width: room.width * shownZoom, height: room.height * shownZoom }} title="Click a layer to select its member" />
+          <canvas
+            ref={canvas}
+            tabIndex={moveMode ? 0 : undefined}
+            onClick={moveMode ? undefined : pick}
+            onMouseDown={startMove}
+            onKeyDown={nudge}
+            className={[transparent ? 'checker' : '', moveMode ? 'moving' : ''].filter(Boolean).join(' ') || undefined}
+            style={{ width: room.width * shownZoom, height: room.height * shownZoom }}
+            title={moveMode ? 'Drag the furni to place it on its tiles (Alt: only the layer under the mouse); the arrow keys move it by a pixel, with Shift by 8' : 'Click a layer to select its member'}
+          />
         ) : (
           wallItem ? (
             <p className="empty">No wall item layers found (layer a: <code>leftwall &lt;class&gt;_a_&lt;frame&gt;</code> or <code>rightwall …</code>, with a <code>&lt;class&gt;.data</code> listing the layers).</p>
@@ -295,6 +444,7 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
         )}
       </div>
       <div className="pane-foot preview-foot">
+        {setMoveMode && onMove && <label className="chip" title="Drag the furni in the room to place it on its tiles (it moves its pictures' registration points). Alt-drag moves only the layer under the mouse"><input type="checkbox" checked={moveMode} onChange={(e) => setMoveMode(e.target.checked)} />move</label>}
         {!wallItem && <label className="chip"><input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />shadow</label>}
         <label className="chip"><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} />grid</label>
         {!wallItem && <label className="chip" title="Light up the tiles the furni stands on (as Odin counts them)"><input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} />tiles</label>}
@@ -302,6 +452,22 @@ export function Preview({ doc, furni, rev, selected, onPick, extraColors = [], o
         <label className="chip" title="Draw the room on a transparent background (saved pictures keep it)"><input type="checkbox" checked={transparent} onChange={(e) => setTransparent(e.target.checked)} />transparent</label>
         <label className="swatch-label" title="Floor">floor <input type="color" value={floor} onChange={(e) => setFloor(e.target.value)} /></label>
         {!transparent && <label className="swatch-label" title="Background">bg <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} /></label>}
+        {!wallItem && (
+          <span className="habbo-ctl" title="A Habbo in the room, drawn where the hotel puts one: beside the furni for its size, or sitting / lying on it to set the seat's height and see which layers go in front of it (their depth, in the Layers tab)">
+            <select value={pose} onChange={(e) => setPose(e.target.value as HabboPose)}>
+              <option value="none">no Habbo</option>
+              <option value="stand">Habbo beside it</option>
+              <option value="sit">Habbo sitting on it</option>
+              <option value="lay">Habbo lying on it</option>
+            </select>
+            {(pose === 'sit' || pose === 'lay') && (
+              <label title="The seat's height in the furni's definition (Height when publishing): 1.0 is a usual chair, a bed is around 1.6. Each 0.1 lifts the Habbo about 3 px">
+                seat <input type="number" min={0} max={10} step={0.1} value={seat} onChange={(e) => setSeat(Math.max(0, Math.min(10, Math.round((+e.target.value || 0) * 10) / 10)))} />
+              </label>
+            )}
+            {pose !== 'none' && habboFailed && <span className="muted small" title="The hotel's Habbo pictures couldn't be loaded from this page">no picture</span>}
+          </span>
+        )}
         <span className="spacer" />
         <select value={zoom} onChange={(e) => setZoom(+e.target.value)} title="Zoom">
           <option value={0}>fit</option>

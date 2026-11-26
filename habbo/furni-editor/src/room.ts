@@ -12,6 +12,7 @@
  */
 import type { CastDocument } from '../../../vm-rust/pkg/vm_rust.js';
 import { spriteRect, type Layer } from './furni';
+import { blendOnto, type HabboPicture } from './habbo';
 
 export interface RoomSize {
   cols: number;
@@ -179,7 +180,17 @@ export interface Placement {
   hidden?: Set<string>;
 }
 
+/** A picture drawn among the furni's sprites by depth (a Habbo): `z` as the client's locZ, 1000 per tile of x + y. */
+export interface Extra {
+  picture: HabboPicture;
+  left: number;
+  top: number;
+  z: number;
+}
+
 export interface SpriteSpec {
+  /** the client's locZ: 1000 * (x + y + 1) plus the layer's depth (not sent to the renderer) */
+  z?: number;
   slot: number;
   left: number;
   top: number;
@@ -200,6 +211,7 @@ export function sprites(room: RoomLayout, placements: Placement[]): SpriteSpec[]
       if (p.hidden?.has(l.letter)) continue;
       const r = spriteRect(l, locH, locV);
       out.push({
+        z: p.wall ? -1e6 + l.z : 1000 * (p.x + p.y + 1) + l.z - 1,
         slot: l.slot,
         left: r.left,
         top: r.top,
@@ -216,11 +228,45 @@ export function sprites(room: RoomLayout, placements: Placement[]): SpriteSpec[]
 /** Draw the placements on `floor`. With `floorOnWhite` (the same floor on a white background instead of black) the
  *  background comes out transparent: the room is drawn on both, and each pixel's alpha is what the two renders tell
  *  apart (where they agree it's opaque, where black shows through as black and white as white it's see-through). */
-export function composite(doc: CastDocument, room: RoomLayout, floor: Uint8Array, placements: Placement[], floorOnWhite?: Uint8Array): ImageData {
-  const spec = JSON.stringify({ width: room.width, height: room.height, sprites: sprites(room, placements) });
-  const a = doc.render(spec, floor);
+export function composite(doc: CastDocument, room: RoomLayout, floor: Uint8Array, placements: Placement[], floorOnWhite?: Uint8Array, extras: Extra[] = []): ImageData {
+  const list = sprites(room, placements);
+  const strip = (s: SpriteSpec[]) => s.map(({ z: _z, ...rest }) => rest);
+  let draw: (base: Uint8Array) => Uint8Array;
+  if (!extras.length) {
+    const spec = JSON.stringify({ width: room.width, height: room.height, sprites: strip(list) });
+    draw = (base) => doc.render(spec, base);
+  } else {
+    // Sprites and extras together by depth (sprites keep their order among themselves); each run of sprites is one
+    // render over what is drawn so far, an extra is blended in between.
+    const all: ({ sprite: SpriteSpec } | { extra: Extra })[] = [];
+    const pending = [...extras].sort((a, b) => a.z - b.z);
+    for (const sprite of list) {
+      while (pending.length && pending[0].z < (sprite.z ?? 0)) all.push({ extra: pending.shift()! });
+      all.push({ sprite });
+    }
+    for (const extra of pending) all.push({ extra });
+    draw = (base) => {
+      let buf: Uint8Array | null = null;
+      let run: SpriteSpec[] = [];
+      const flush = () => {
+        if (!run.length && buf) return;
+        buf = doc.render(JSON.stringify({ width: room.width, height: room.height, sprites: strip(run) }), buf ?? base);
+        run = [];
+      };
+      for (const item of all) {
+        if ('sprite' in item) run.push(item.sprite);
+        else {
+          flush();
+          blendOnto(buf!, room.width, room.height, item.extra.picture, item.extra.left, item.extra.top);
+        }
+      }
+      flush();
+      return buf!;
+    };
+  }
+  const a = draw(floor);
   if (floorOnWhite) {
-    const b = doc.render(spec, floorOnWhite);
+    const b = draw(floorOnWhite);
     for (let i = 0; i < a.length; i += 4) {
       const alpha = 255 - Math.max(b[i] - a[i], b[i + 1] - a[i + 1], b[i + 2] - a[i + 2], 0);
       if (alpha <= 0) {

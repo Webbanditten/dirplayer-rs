@@ -4,6 +4,7 @@ import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { parseLingo, LingoError } from '../lingo';
 import { ALIAS_INDEX, type Furni, type Member } from '../furni';
 import { paintMember } from './Thumb';
+import { tileDiamonds, tilesOfMember } from '../tiles';
 
 export type ImportMode = 'auto' | 'indexed' | 'rgba';
 
@@ -26,8 +27,11 @@ interface Props {
 
 const LINGO_FIELDS = /\.(props|data)$|^asset\.index$/i;
 
-function BitmapEditor({ doc, member, rev, edit }: { doc: CastDocument; member: Member; rev: number; edit: Props['edit'] }) {
+function BitmapEditor({ doc, furni, member, rev, edit }: { doc: CastDocument; furni: Furni; member: Member; rev: number; edit: Props['edit'] }) {
   const h = member.bitmap!;
+  const [guide, setGuide] = useState(true);
+  // The tiles the picture stands on (from its name), drawn around its registration point.
+  const tiles = tilesOfMember(furni, member.name);
   const [zoom, setZoom] = useState(() => Math.max(1, Math.min(8, Math.floor(256 / Math.max(h.width, h.height, 1)))));
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<{ x: number; y: number; regX: number; regY: number } | null>(null);
@@ -37,15 +41,34 @@ function BitmapEditor({ doc, member, rev, edit }: { doc: CastDocument; member: M
     if (!c) return;
     const img = document.createElement('canvas');
     paintMember(img, doc, member.slot, h, zoom, false, true);
-    c.width = img.width + pad * 2;
-    c.height = img.height + pad * 2;
+    // With the tiles shown the canvas covers them too: they can reach beyond the picture.
+    const shapes = guide && tiles ? tileDiamonds(tiles.dims, tiles.direction, tiles.tile) : [];
+    const xs = shapes.flatMap((d) => d.map((p) => p[0] + h.regX)), ys = shapes.flatMap((d) => d.map((p) => p[1] + h.regY));
+    const minX = Math.min(0, ...xs), minY = Math.min(0, ...ys);
+    const maxX = Math.max(h.width, ...xs), maxY = Math.max(h.height, ...ys);
+    const ox = pad - minX * zoom, oy = pad - minY * zoom;
+    c.width = (maxX - minX) * zoom + pad * 2;
+    c.height = (maxY - minY) * zoom + pad * 2;
     const ctx = c.getContext('2d')!;
     ctx.clearRect(0, 0, c.width, c.height);
-    ctx.drawImage(img, pad, pad);
+    for (const d of shapes) {
+      ctx.beginPath();
+      d.forEach(([x, y], i) => {
+        const px = ox + (x + h.regX) * zoom + 0.5, py = oy + (y + h.regY) * zoom + 0.5;
+        if (i) ctx.lineTo(px, py);
+        else ctx.moveTo(px, py);
+      });
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(152, 152, 101, 0.45)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(90, 90, 50, 0.7)';
+      ctx.stroke();
+    }
+    ctx.drawImage(img, ox, oy);
     ctx.strokeStyle = 'rgba(0,0,0,.35)';
-    ctx.strokeRect(pad - 0.5, pad - 0.5, img.width + 1, img.height + 1);
-    const rx = pad + h.regX * zoom + zoom / 2;
-    const ry = pad + h.regY * zoom + zoom / 2;
+    ctx.strokeRect(ox - 0.5, oy - 0.5, img.width + 1, img.height + 1);
+    const rx = ox + h.regX * zoom + zoom / 2;
+    const ry = oy + h.regY * zoom + zoom / 2;
     ctx.strokeStyle = '#e0245e';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -54,7 +77,7 @@ function BitmapEditor({ doc, member, rev, edit }: { doc: CastDocument; member: M
     ctx.moveTo(Math.round(rx) + 0.5, ry - 10);
     ctx.lineTo(Math.round(rx) + 0.5, ry + 10);
     ctx.stroke();
-  }, [doc, member, rev, zoom, h]);
+  }, [doc, member, rev, zoom, h, guide, tiles?.dims[0], tiles?.dims[1], tiles?.direction, tiles?.tile]);
 
   const setReg = (x: number, y: number) => edit(`Registration point ${x}, ${y}`, () => doc.setRegPoint(member.slot, x, y), { group: `reg:${member.slot}` });
 
@@ -65,6 +88,7 @@ function BitmapEditor({ doc, member, rev, edit }: { doc: CastDocument; member: M
           {h.width}×{h.height}, {h.depth}-bit{h.depth <= 8 ? `, palette ${h.paletteId > 0 ? `member ${h.paletteId}` : h.paletteId}` : h.useAlpha ? ', alpha' : ''}
         </span>
         <span className="spacer" />
+        {tiles && <label className="chip" title="The tiles the furni stands on, around the registration point"><input type="checkbox" checked={guide} onChange={(e) => setGuide(e.target.checked)} />tiles</label>}
         zoom
         <input type="range" min={1} max={12} value={zoom} onChange={(e) => setZoom(+e.target.value)} />
       </div>
@@ -155,7 +179,7 @@ export function Inspector(props: Props) {
       </div>
       {member.type === 'bitmap' && member.bitmap && (
         <>
-          <BitmapEditor doc={doc} member={member} rev={rev} edit={edit} />
+          <BitmapEditor doc={doc} furni={furni} member={member} rev={rev} edit={edit} />
           <div className="row">
             <button className="primary" onClick={() => props.onPaint(slot)} title="Draw on the pixels, in the member's own palette (also: double-click it in the grid)"><Icon name="brush" size={14} />Paint…</button>
             <button onClick={() => props.onImport(slot)}><Icon name="image" size={14} />Replace…</button>

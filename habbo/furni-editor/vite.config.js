@@ -22,6 +22,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/hotel-api/, '/api/hotel'),
       },
+      // The hotel's Habbo pictures (the Habbo in the preview room), same-origin too.
+      '/hotel-site': {
+        target: process.env.HOTEL_SITE ?? 'https://habbo-danmark.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/hotel-site/, ''),
+      },
     },
   },
   build: { outDir: path.resolve(here, 'dist'), emptyOutDir: true, target: 'es2020' },

@@ -245,7 +245,7 @@ label.chip:has(input:focus-visible) { outline: 2px solid var(--ring); outline-of
 .hero h1 { margin: 0; font: 30px/1.1 var(--font-pixel); letter-spacing: 0.02em; }
 .hero h1 em { font-style: normal; color: var(--accent-text); }
 .hero p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
-.start-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; width: 100%; max-width: 920px; }
+.start-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; width: 100%; max-width: 1100px; }
 .start-card {
   display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; text-align: left;
   height: auto; padding: 18px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
@@ -472,3 +472,64 @@ label.chip:has(input:focus-visible) { outline: 2px solid var(--ring); outline-of
 .modal-hint { font-size: 12px; }
 .modal-hint.bad { color: var(--danger); }
 .modal-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* --- new furni --- */
+.modal.new-furni { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.nf-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nf-row input[type='number'] { width: 54px; }
+.nf-row select { flex: 1; min-width: 0; }
+.nf-label { font-size: 12px; color: var(--muted); }
+.nf-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.nf-slot { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
+.nf-slot.over { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.nf-slot-head { display: flex; flex-direction: column; gap: 1px; }
+.nf-slot-head b { font-size: 12.5px; }
+.nf-drop { position: relative; min-height: 150px; height: auto; padding: 8px; display: grid; place-items: center; border: 1px dashed var(--line-2); border-radius: var(--r-sm); overflow: hidden; }
+.nf-drop canvas { image-rendering: pixelated; max-width: 100%; max-height: 240px; }
+.nf-slot.filled .nf-drop { border-style: solid; }
+.nf-drop-text { position: absolute; inset: auto 0 10px 0; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.nf-slot-foot { display: flex; align-items: center; gap: 6px; }
+.start-card.featured { border-color: var(--ring); background: linear-gradient(180deg, var(--accent-soft), transparent 70%), var(--raised); }
+.preview-stage canvas.moving { cursor: move; outline: none; }
+.preview-stage canvas.moving:focus-visible { box-shadow: 0 0 0 2px var(--ring); }
+.segmented .follows { align-self: center; padding: 0 8px 0 4px; font-size: 11px; color: var(--accent-text); }
+.segmented button.refresh { padding: 0 6px; }
+
+/* --- layers and states tabs --- */
+.layers-panel, .states-panel { display: flex; flex-direction: column; gap: 8px; }
+.layers-panel .row, .states-panel .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.layers-panel label:not(.chip), .states-panel label:not(.chip) { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.lp-row { display: flex; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
+.lp-row.selected { border-color: var(--ring); }
+.lp-thumb { position: relative; flex: none; width: 76px; height: 76px; padding: 4px; display: grid; place-items: center; overflow: hidden; }
+.lp-thumb canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+.lp-thumb .layer-name { position: absolute; top: 3px; left: 3px; z-index: 1; }
+.lp-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.lp-fields select { max-width: 150px; }
+.lp-fields input[type='range'] { width: 84px; }
+.lp-fields input[type='number'] { width: 64px; }
+.lp-num { min-width: 34px; font-variant-numeric: tabular-nums; }
+.sp-states { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-state { height: 30px; border-radius: 999px; padding: 0 12px 0 6px; display: inline-flex; align-items: center; gap: 6px; }
+.sp-state b { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--field); font-size: 11px; }
+.sp-state.on { background: var(--accent-soft); border-color: var(--ring); font-weight: 650; }
+.sp-state.on b { background: var(--accent); color: var(--accent-ink); }
+.sp-state.add { padding: 0 12px; gap: 4px; color: var(--muted); border-style: dashed; }
+.sp-state-edit input { width: 140px; }
+.sp-row { display: flex; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
+.sp-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.sp-frames { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; }
+.sp-frame { position: relative; width: 52px; height: 58px; padding: 2px 2px 14px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--field); overflow: hidden; }
+.sp-frame canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+.sp-frame .frame-no { position: absolute; bottom: 1px; left: 0; right: 0; text-align: center; font-size: 10px; color: var(--muted); }
+.sp-frame.missing { border-style: dashed; border-color: var(--danger); }
+.sp-frame.pick { cursor: pointer; }
+.sp-frame.pick:hover { border-color: var(--accent); }
+.sp-x { position: absolute; top: 1px; right: 1px; width: 16px; height: 16px; padding: 0; line-height: 1; border-radius: 50%; font-size: 12px; opacity: 0; }
+.sp-frame:hover .sp-x { opacity: 1; }
+.sp-frames .add { width: 30px; height: 58px; }
+.sp-pick { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); }
+.sp-timing input[type='number'] { width: 56px; }
+.habbo-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.habbo-ctl label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.habbo-ctl input[type='number'] { width: 58px; }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CastDocument } from '../../../../vm-rust/pkg/vm_rust.js';
 import { CastDocument as CastDocumentClass } from '../wasm';
 import type { Furni } from '../furni';
+import { tileDiamonds, tilesOfMember } from '../tiles';
 import {
   BUILTIN_PALETTES, XP_COLORS, blur, clone, ellipse, flip, floodFill, lightRamp, radialGradient, fromHex, fromRgbBytes, getPixel, greyRamp, hex, line, nearestIndex,
   paletteFromColors, rect, remap, resize, spray, stamp, toIndexed, toRgba, toRgbaImage, toRgbBytes, type Ink, type PaintImage, type ShapeFill,
@@ -48,6 +49,7 @@ const PAD = 12;
 export function Paint({ doc, furni, slot, edit, onClose }: Props) {
   const member = furni.bySlot.get(slot);
   const header = member?.bitmap;
+  const tiles = member ? tilesOfMember(furni, member.name) : null;
 
   const paletteColors = (id: number): number[] => {
     if (id > 0) return fromRgbBytes(doc.paletteColors(id));
@@ -75,6 +77,7 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
   const [shapeFill, setShapeFill] = useState<ShapeFill>('outline');
   const [zoom, setZoom] = useState(() => (header ? Math.max(1, Math.min(16, Math.floor(480 / Math.max(header.width, header.height, 1)))) : 4));
   const [grid, setGrid] = useState(true);
+  const [tileGuide, setTileGuide] = useState(true);
   const [zeroClear, setZeroClear] = useState(true);
   const [remapOnSwitch, setRemapOnSwitch] = useState(true);
   const black = initial?.img.kind === 'indexed' ? nearestIndex(initial.palette, 0x000000) : 0xff000000;
@@ -185,6 +188,21 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
     }
     ctx.strokeStyle = 'rgba(0,0,0,0.45)';
     ctx.strokeRect(PAD * zoom - 0.5, PAD * zoom - 0.5, w * zoom + 1, h * zoom + 1);
+    // The tiles the furni stands on, around the registration point: where the floor is while you draw.
+    if (tileGuide && tiles) {
+      ctx.strokeStyle = 'rgba(40, 150, 220, 0.85)';
+      ctx.lineWidth = 1;
+      for (const d of tileDiamonds(tiles.dims, tiles.direction, tiles.tile)) {
+        ctx.beginPath();
+        d.forEach(([x, y], i) => {
+          const px = (PAD + cur.regX + x) * zoom + 0.5, py = (PAD + cur.regY + y) * zoom + 0.5;
+          if (i) ctx.lineTo(px, py);
+          else ctx.moveTo(px, py);
+        });
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
     const rx = (PAD + cur.regX) * zoom + zoom / 2, ry = (PAD + cur.regY) * zoom + zoom / 2;
     ctx.strokeStyle = '#e0245e';
     ctx.beginPath();
@@ -464,6 +482,7 @@ export function Paint({ doc, furni, slot, edit, onClose }: Props) {
             <span className="spacer" />
             zoom <input type="range" min={1} max={32} value={zoom} onChange={(e) => setZoom(+e.target.value)} /> {zoom}×
             <label><input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} /> grid</label>
+            {tiles && <label title="The outline of the tiles the furni stands on (blue), around its registration point"><input type="checkbox" checked={tileGuide} onChange={(e) => setTileGuide(e.target.checked)} /> tiles</label>}
             {indexed && <label title="Show index 0 (the background the inks drop) see-through"><input type="checkbox" checked={zeroClear} onChange={(e) => setZeroClear(e.target.checked)} /> index 0 clear</label>}
           </div>
         </div>

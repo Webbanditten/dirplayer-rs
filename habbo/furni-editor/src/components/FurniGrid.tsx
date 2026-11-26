@@ -108,6 +108,7 @@ interface Props {
   onAddLayer: (letter: string) => void;
   onMirror: () => void;
   onAddLight?: () => void;
+  onShadow?: () => void;
 }
 
 function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc: CastDocument; furni: Furni; cell: Cell; rev: number; selected: boolean; onSelect: () => void; onPaint?: (slot: number) => void }) {
@@ -123,7 +124,7 @@ function CellView({ doc, furni, cell, rev, selected, onSelect, onPaint }: { doc:
   );
 }
 
-export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror, onAddLight }: Props) {
+export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint, onAddFrame, onAddLayer, onMirror, onAddLight, onShadow }: Props) {
   const g = gridModel(furni, small || furni.isSmallCast());
   const dirsUsed = g.wall ? [2, 4] : [...new Set(g.rows.flatMap((r) => [...r.dirs.keys()]))].sort((a, b) => a - b);
   const nextLetter = String.fromCharCode(97 + g.rows.length);
@@ -133,6 +134,7 @@ export function FurniGrid({ doc, furni, rev, small, selected, onSelect, onPaint,
         <span className="cls-name">{g.cls || '(no class)'}</span>
         <span className="dims">{g.wall ? 'wall item' : `${g.dims[0]}×${g.dims[1]} tiles`}</span>
         <span className="spacer" />
+        {onShadow && !g.wall && <button onClick={onShadow} title={g.shadows.length ? 'Make the shadow again: the furni\'s tiles as a flat dark shape (replaces the one it has)' : 'Make a shadow: the furni\'s tiles as a flat dark shape, like the hotel\'s furni have'}><Icon name="room" size={14} />Shadow</button>}
         {onAddLight && <button onClick={onAddLight} title="Add a glow layer (ink 33), like the dragon lamp's halo or the HC lamp's floor light"><Icon name="sun" size={14} />Light…</button>}
         <button onClick={onMirror} title={g.wall ? 'Add memberalias.index lines so the right wall shows the left wall\'s members mirrored, where it has none of its own' : 'Add memberalias.index lines so directions 4 and 6 show 2 and 0 mirrored, where they have no members of their own'}>
           <Icon name="mirror" size={14} />{g.wall ? 'left → right' : '2→4, 0→6'}

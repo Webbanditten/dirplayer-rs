@@ -17,6 +17,33 @@ commit (`SKIP_VM=1` when `vm-rust/pkg` is already a release build). Only the edi
 from the asset host at runtime (it sends CORS headers). The hotel's colour variants come through the dev server's
 `/hotel-api` proxy, so on Pages the preview has no hotel colours (type them, or they come from an imported Flash file).
 
+## Making a furni from your own drawing
+
+The short way from a picture to a furni in the hotel:
+
+1. **New** (the start page's first card, the toolbar, or just drop or paste a picture): a class name, floor furni or
+   wall item, how many tiles, how it turns (not at all / mirrored / four sides from two pictures) and a picture per
+   side. A picture without transparency gets its background cut away. No picture gives an empty canvas over its tiles
+   to paint on. The furni is built like the hotel's own (`src/newfurni.ts`): layer a stood on its tiles
+   (`src/tiles.ts`: its pixels centred on the tiles, its lowest pixel 3 px above their front corner, as chair_norja,
+   sofa_silo and bed_polyfon stand), the other directions as mirror images, a shadow, the icon, asset.index, and the
+   32 px cast.
+2. **Place it**: with *move* on (under the room) drag the furni on its tiles; Alt-drag moves one layer, the arrow keys
+   a pixel (Shift: 8). The tiles it stands on light up. The inspector and Paint draw the tiles under the picture too.
+3. **Layers** tab: how each layer is drawn (normal, white see-through, tinted with a part colour, light...), how
+   solid, its depth per direction, whether clicks pass, delete a layer. **States** tab: the states (a lamp's off and
+   on) and per layer the frame it shows or the frames it steps through, how fast, how often, in order or at random.
+   Both write `.props` / `.data` (`src/layers.ts`), which stay editable as text.
+4. **A Habbo in the room** (under the room): beside the furni for its size, or sitting / lying on it, placed and
+   layered as the client does it (`src/habbo.ts`, from hh_human's Human Class). The seat height you set there is the
+   definition's height when publishing, and tells Housekeeping it is a seat or a bed.
+5. **Check**, then **Publish…** in Housekeeping, where *Give me one* puts it in your hand and *Put it in the catalogue*
+   sells it.
+
+The 32 px version follows the 64 px one by itself ("auto" next to the size switch): it is made again after every
+change to the large cast, until the small cast is changed by hand; ↻ makes it follow again. A cast pair opened from
+the hotel follows when its small cast is exactly what the editor would make.
+
 ## What it does
 
 - **Open** a cast from disk (or drop it on the window), or load one by class name from the hotel's asset host
@@ -61,6 +88,13 @@ from the asset host at runtime (it sends CORS headers). The hotel's colour varia
   other size when needed); some rows can be fixed from the list. Publishing to Housekeeping waits until there are no
   errors. On 140 hotel furni the drawing checks found nothing but real gaps (the hotel's 32 px chair_norja has no
   layer b and c for direction 4).
+- **Shadow** (in the furni grid, or Check's "Make shadow"): the furni's tiles as a flat dark shape, 3 px in
+  (`src/shadow.ts`; bar_polyfon's and throne's shadows are exactly their tile's diamond). One member for every
+  direction when its tiles are square, else `_sd_0` and `_sd_2` with alias names for 4 and 6; in both sizes.
+- A new frame in a direction that the furni shows mirrored elsewhere (4 of 2, 6 of 0) gets its mirrored name too; a
+  new layer of a furni with a `.data` is listed there; deleting a picture takes its alias names with it.
+- **Paste** (Ctrl/Cmd+V) or drop a picture: over the selected picture, or as the start of a new furni when nothing is
+  open.
 - **Make icon** (the picture button under the room): `<class>_small`, the picture the hand, trades and the catalogue
   show, from the preview's direction, state and part colours at 32 px (the 32 px cast's own pictures when it's open,
   else the large ones halved), cut out on transparency, in both casts. A drawn icon's colour parts (`_small_c`) are
@@ -171,7 +205,12 @@ room that has the furni: the client loads it instead of the hotel's copy.
 
 ## Not done yet
 
-- Wall items (posters, windows, `leftwall <class>` members) open and edit, but the preview only draws floor furni.
+- Colour variants (`<class>*2`...): the Layers tab sets the part colours the room shows and Housekeeping saves them on
+  the furni's one definition; further variants are made in the catalogue editor.
+- Several pictures at once (a folder of frames, a sprite sheet, an animated GIF as frames): frames are added one by one.
+- States with several sequences picked at random (`sequences`) are shown in the States tab but edited as text.
+- The Habbo in the room needs the hotel's Habbo pictures to be readable from the editor's page
+  (`Access-Control-Allow-Origin` on `/habbo-imaging/avatarimage`, which OdinCMS sends); "no picture" otherwise.
 - Furni animated by their class's code (the dice, the smoke machine) don't animate in the preview.
 - New members are copies of an existing bitmap or field of the cast (header, palette); a cast with neither can't get one.
 - The written casts are checked by DirPlayer's reader and the web client, not by Shockwave.

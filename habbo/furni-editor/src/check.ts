@@ -9,7 +9,7 @@ import { gridModel } from './components/FurniGrid';
 import type { SideKey } from './history';
 
 export type Level = 'error' | 'warning' | 'info';
-export type Fix = 'icon' | 'small' | 'rename';
+export type Fix = 'icon' | 'small' | 'rename' | 'shadow';
 
 export interface Issue {
   level: Level;
@@ -241,7 +241,7 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
     push('warning', `No icon (${cls}_small): the hand, trades and the catalogue show a blank square`, undefined, 'icon');
   }
   if (!wall && !furni.members.some((m) => m.name.toLowerCase().startsWith(own.toLowerCase() + '_sd')) && ![...furni.names.keys()].some((n) => n.startsWith(own.toLowerCase() + '_sd'))) {
-    push('info', `No shadow (${own}_sd_…): the furni stands without one`);
+    push('info', `No shadow (${own}_sd_…): the furni stands without one`, undefined, 'shadow');
   }
 }
 

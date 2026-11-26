@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile, pickFiles } from './wasm';
 import { buildCast, planFlash, splitPlan } from './flash';
-import { largeFileName, makeSmall, smallFileName } from './small';
+import { largeFileName, madeFromLarge, makeSmall, smallFileName } from './small';
 import { ALIAS_INDEX, ASSET_INDEX, Furni, isWallItem, parseMemberName } from './furni';
 import { History, type SideKey, type Snap, type Step } from './history';
 import { clearAutosave, loadAutosave, writeAutosave, type Autosave } from './autosave';
@@ -14,6 +14,13 @@ import { Preview } from './components/Preview';
 import { Paint } from './components/Paint';
 import { LightPanel } from './components/LightPanel';
 import { CheckPanel } from './components/CheckPanel';
+import { LayersPanel } from './components/LayersPanel';
+import { StatesPanel } from './components/StatesPanel';
+import { NewFurni, classNameProblem } from './components/NewFurni';
+import { createFurni, type NewFurniOptions } from './newfurni';
+import { makeShadow } from './shadow';
+import type { HabboPose } from './habbo';
+import { listLayer, readData, stateCount } from './layers';
 import { Icon, Logo } from './components/Icon';
 
 /** How a change joins the undo history: `group` merges edits in a row (a painting session, arrow-key nudges);
@@ -34,6 +41,9 @@ function ago(at: number) {
 }
 
 const DEFAULT_HOST = 'https://images.habbo-danmark.com/hof_furni/';
+const DEFAULT_SITE = 'https://habbo-danmark.com';
+/** The hotel's website for its Habbo pictures: through the dev server's proxy in development (same origin). */
+const DEV = !!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
 const IMAGE_TYPES = 'image/png,image/gif,image/jpeg';
 
 function stored(key: string, fallback: string) {
@@ -90,7 +100,21 @@ export function App() {
   const [other, setOther] = useState<Side | null>(null);
   const [selected, setSelected] = useState<{ slot: number; alias?: string } | null>(null);
   const [status, setStatus] = useState('');
-  const [tab, setTab] = useState<'furni' | 'members'>('furni');
+  const [tab, setTab] = useState<'furni' | 'layers' | 'states' | 'members'>('furni');
+  // What the room shows: the direction the furni is turned to, its state (0-based) and its part colours.
+  const [direction, setDirection] = useState(2);
+  const [viewState, setViewState] = useState(0);
+  const [colors, setColors] = useState('');
+  // A Habbo in the room, and the seat height it sits or lies at (the definition's top_height when publishing).
+  const [pose, setPoseState] = useState<HabboPose>('none');
+  const [seat, setSeat] = useState(1);
+  const setPose = (p: HabboPose) => {
+    setPoseState(p);
+    // the usual heights to start from: a chair's seat is 1.0, a bed's 1.6
+    if (p === 'lay' && seat === 1) setSeat(1.6);
+    else if (p === 'sit' && seat === 1.6) setSeat(1);
+  };
+  const [site, setSite] = useState(() => stored('furniEditor.site', DEFAULT_SITE));
   const [painting, setPainting] = useState<number | null>(null);
   const [lighting, setLighting] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>('auto');
@@ -102,6 +126,11 @@ export function App() {
   const [flashColors, setFlashColors] = useState<{ label: string; colour: string }[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  /** a picture dropped or pasted before anything is open: the New furni dialog starts with it */
+  const [newPicture, setNewPicture] = useState<File | null>(null);
+  /** Dragging in the room moves the furni's pictures (their registration points) instead of selecting them. */
+  const [moveMode, setMoveMode] = useState(false);
   const [theme, setTheme] = useState(() => stored('furniEditor.theme', 'auto'));
   useEffect(() => {
     const root = document.documentElement;
@@ -125,8 +154,12 @@ export function App() {
   const gens = useRef<Record<SideKey, number>>({ large: 0, small: 0 });
   const saved = useRef<Record<SideKey, number>>({ large: 0, small: 0 });
   const nextGen = useRef(1);
-  const live = useRef({ doc, other, fileName, dirty, smallShown });
-  live.current = { doc, other, fileName, dirty, smallShown };
+  /** The 32 px cast follows the 64 px one: it was made from it (and never changed by hand), so it is made again after
+   *  every change to the large cast. `followedGen` is the large generation it was last made from. */
+  const [smallFollows, setSmallFollows] = useState(false);
+  const followedGen = useRef(0);
+  const live = useRef({ doc, other, fileName, dirty, smallShown, smallFollows });
+  live.current = { doc, other, fileName, dirty, smallShown, smallFollows };
   const keys = (small: boolean): [SideKey, SideKey] => (small ? ['small', 'large'] : ['large', 'small']);
 
   useEffect(() => {
@@ -140,16 +173,24 @@ export function App() {
 
   /** Show a new furni (and its other size, when there is one), dropping the open ones and their history. */
   const show = useCallback(
-    (next: CastDocument, name: string, changed: boolean, pair: Side | null = null) => {
+    (next: CastDocument, name: string, changed: boolean, pair: Side | null = null, follows?: boolean) => {
       doc?.free();
       other?.doc.free();
       history.current.clear();
       setHistRev((h) => h + 1);
-      const [mine, theirs] = keys(new Furni(next).isSmallCast());
+      const shown = new Furni(next);
+      const [mine, theirs] = keys(shown.isSmallCast());
       gens.current = { large: 0, small: 0 };
+      // An untouched small cast (exactly what the editor makes from the large one) keeps following it.
+      followedGen.current = 0;
+      setSmallFollows(follows ?? (!!pair && !shown.isSmallCast() && madeFromLarge(next, pair.doc, shown.className())));
       saved.current = { [mine]: changed ? -1 : 0, [theirs]: pair?.dirty ? -1 : 0 } as Record<SideKey, number>;
       setOther(pair);
       setDoc(next);
+      setViewState(0);
+      // each furni starts without a Habbo: sitting or lying on it also tells Housekeeping it is a seat or a bed
+      setPoseState('none');
+      setSeat(1);
       setPainting(null);
       setFileName(name);
       setDirty(changed);
@@ -220,6 +261,37 @@ export function App() {
     }
   };
 
+  /** A new furni from pictures (or empty, to paint): built on the hotel's template cast like a Flash import, with its
+   *  shadow, icon and small cast. Returns why it failed, or null. */
+  const createNew = async (o: NewFurniOptions): Promise<string | null> => {
+    if (anyDirty && !confirm('Discard the changes to the open cast?')) return 'Kept the open cast';
+    try {
+      const template = `hh_furni_xx_${templateClass.trim() || 'chair_norja'}.cct`;
+      const res = await fetch(host.replace(/\/?$/, '/') + template);
+      if (!res.ok) throw new Error(`couldn't load the template cast ${template} (HTTP ${res.status})`);
+      const made = createFurni(new Uint8Array(await res.arrayBuffer()), o);
+      show(made.large, largeFileName(o.name), true, { doc: made.small, name: smallFileName(o.name), dirty: true }, true);
+      setFlashColors([]);
+      setHotelFurni(null);
+      setNewOpen(false);
+      setNewPicture(null);
+      setMoveMode(!made.blank && o.kind === 'floor');
+      const f = new Furni(made.large);
+      const first = f.members.find((m) => m.type === 'bitmap' && /_a_0(_|$)/.test(m.name));
+      if (made.blank && first) setPainting(first.slot);
+      setStatus(
+        made.blank
+          ? `Made ${o.name} with an empty canvas over its tiles: paint it here (the tiles show where it stands), then "Make icon" under the room`
+          : o.kind === 'wall'
+            ? `Made ${o.name}: a wall item with its mirror image for the right wall, an icon and a 32 px version`
+            : `Made ${o.name}: it stands on its tiles with ${o.shadow ? 'a shadow, ' : ''}an icon and a 32 px version. Drag it in the room to place it exactly`,
+      );
+      return null;
+    } catch (e) {
+      return `Couldn't make the furni: ${e instanceof Error ? e.message : e}`;
+    }
+  };
+
   /** Run a change to the document as one undo step (copying the casts it touches first), then refresh everything
    *  that shows it. */
   const edit: Edit = useCallback((what: string, fn: () => void, opts: EditOptions = {}) => {
@@ -248,10 +320,21 @@ export function App() {
       gens.current[theirs] = nextGen.current++;
       setOther((o) => (o ? { ...o, dirty: true } : o));
     }
+    let note = '';
+    if (now.smallFollows && now.other) {
+      if (mine === 'small' && !both) {
+        // changed by hand: from here on the small cast is its own
+        setSmallFollows(false);
+        note = ' · the 32 px version no longer follows the 64 px one (the ↻ next to "32 px" makes it from the large pictures again)';
+      } else if (both) {
+        // both changed alike: still what the large one gives
+        followedGen.current = gens.current.large;
+      }
+    }
     setRev((r) => r + 1);
     setDirty(true);
     setHistRev((h) => h + 1);
-    setStatus(what);
+    setStatus(what + note);
   }, []);
 
   /** The casts as they are now, for the step that will bring them back (the documents move, nothing is copied). */
@@ -359,6 +442,42 @@ export function App() {
     setRestore(null);
   };
 
+  /** Make the 32 px cast again from the 64 px one (when it follows it and the large cast changed since). Returns the
+   *  small cast as it is afterwards. */
+  const syncSmall = (force = false): Side | null => {
+    const now = live.current;
+    if (!now.doc || !now.other || now.smallShown) return now.other;
+    if (!force && (!now.smallFollows || followedGen.current === gens.current.large)) return now.other;
+    try {
+      const cls = new Furni(now.doc).className();
+      const next: Side = { doc: makeSmall(now.doc, cls), name: smallFileName(cls), dirty: true };
+      const old = now.other.doc;
+      followedGen.current = gens.current.large;
+      gens.current.small = nextGen.current++;
+      live.current = { ...now, other: next };
+      setOther(next);
+      setTimeout(() => old.free(), 2000); // after everything that showed it has let go
+      return next;
+    } catch (e) {
+      console.error('32 px', e);
+      return now.other;
+    }
+  };
+  // A little after the last change to the large cast, so dragging and painting stay light.
+  useEffect(() => {
+    if (!smallFollows || smallShown || !other) return;
+    const t = setTimeout(() => syncSmall(), 500);
+    return () => clearTimeout(t);
+  }, [rev, smallFollows, smallShown, doc]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** The ↻ next to "32 px": the small cast made from the large pictures again, and following them from now on. */
+  const followAgain = () => {
+    if (!doc || !other || smallShown) return;
+    if (!confirm(`Make the 32 px version again from the 64 px pictures? What ${other.name} has now is replaced (the large cast is not changed).`)) return;
+    setSmallFollows(true);
+    syncSmall(true);
+    setStatus('Made the 32 px version from the 64 px pictures: it follows them again');
+  };
+
   /** One cast, or two (a furni's large and small cast) picked together. */
   const openFiles = async (files: File[]) => {
     const casts = files.filter((f) => /\.(cct|cst)$/i.test(f.name)).slice(0, 2);
@@ -401,12 +520,13 @@ export function App() {
     };
     try {
       const [mine, theirs] = keys(smallShown);
+      const pair = syncSmall();
       const done = [saveOne(doc, castName(furni, fileName))];
       setDirty(false);
       saved.current[mine] = gens.current[mine];
-      if (other?.dirty) {
-        done.push(saveOne(other.doc, castName(new Furni(other.doc), other.name)));
-        setOther({ ...other, dirty: false });
+      if (pair?.dirty) {
+        done.push(saveOne(pair.doc, castName(new Furni(pair.doc), pair.name)));
+        setOther({ ...pair, dirty: false });
         saved.current[theirs] = gens.current[theirs];
       }
       const n = issues.filter((i) => i.level === 'error').length;
@@ -430,6 +550,8 @@ export function App() {
         open(new Uint8Array(first.bytes), String(first.name), pair);
         if (Array.isArray(m.colors)) setFlashColors(m.colors.filter((c: { colour?: unknown }) => typeof c?.colour === 'string'));
         setHotelFurni({ sprite: String(m.sprite ?? ''), madeHere: !!m.madeHere });
+        // the seat height of its definition: the Habbo in the room sits or lies there
+        if (typeof m.height === 'number' && m.height >= 0) setSeat(m.height);
         if (!m.madeHere) setStatus(`${m.sprite} is the hotel's own furni: it is never written over. "New furni from this…" makes a copy you can publish.`);
         else if (m.revision) setStatus(`Opened ${m.sprite} r${m.revision} (an earlier version: publishing it makes a new revision)`);
       } else if (m.type === 'published') {
@@ -463,11 +585,14 @@ export function App() {
     }
     try {
       const mine = doc.save();
-      const theirs = other?.doc.save();
+      const theirs = syncSmall()?.doc.save();
       const [large, small] = furni.isSmallCast() ? [theirs, mine] : [mine, theirs];
       if (!large) return setStatus(`Only the small cast is open: open or make the large one (${largeFileName(cls)}) too`);
       const buf = (b: Uint8Array) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
-      const msg = { type: 'publish', sprite: cls, large: buf(large), small: small ? buf(small) : undefined, colour: flashColors[0]?.colour };
+      const states = stateCount(readData(new Furni(furni.isSmallCast() && other ? other.doc : doc)));
+      const msg = { type: 'publish', sprite: cls, large: buf(large), small: small ? buf(small) : undefined, colour: colors.trim() || flashColors[0]?.colour, states, wall: openWall,
+        // what the Habbo in the room was set to: the kind of furni and its seat height
+        kind: pose === 'sit' ? 'seat' : pose === 'lay' ? 'bed' : undefined, height: pose === 'sit' || pose === 'lay' ? seat : undefined };
       toParent(msg, [msg.large, ...(msg.small ? [msg.small] : [])]);
       setStatus(`Sent ${cls} to Housekeeping: confirm it in the panel on the left (the check report and its definition)`);
     } catch (e) {
@@ -487,7 +612,7 @@ export function App() {
     const paintName = painting !== null ? furni.bySlot.get(painting)?.name : undefined;
     let target: Side;
     if (other) {
-      target = other;
+      target = (toSmall ? syncSmall() : null) ?? other;
     } else if (toSmall) {
       const cls = furni.className();
       if (!confirm(`${cls} has no small (32 px) cast open. Make ${smallFileName(cls)} from the large pictures (halved)?`)) return;
@@ -495,6 +620,8 @@ export function App() {
         target = { doc: makeSmall(doc, cls), name: smallFileName(cls), dirty: true };
         gens.current.small = nextGen.current++;
         saved.current.small = -1;
+        followedGen.current = gens.current.large;
+        setSmallFollows(true);
       } catch (e) {
         return setStatus(`Couldn't make the small version: ${e}`);
       }
@@ -581,34 +708,41 @@ export function App() {
     const img = await readImage(file);
     if (!img) return;
     const t = furni.bySlot.get(template)!.bitmap!;
-    edit(`Added ${name}`, () => {
+    // Where the furni shows a direction as the mirror image of this one (4 of 2, 6 of 0), the new picture gets its
+    // mirrored name too, like the ones it already has.
+    const rowA = g.rows.find((r) => r.letter === 'a');
+    const twins = (g.wall ? [[4, 2]] : [[4, 2], [6, 0]])
+      .filter(([to, from]) => {
+        const cells = [...(rowA?.dirs.get(to)?.values() ?? [])];
+        return from === direction && cells.length > 0 && cells.every((c) => c.aliasOf && c.flip);
+      })
+      .map(([to]) => to);
+    edit(`Added ${name}${twins.length ? ` (and its mirror image for ${g.wall ? 'the right wall' : `direction ${twins.join(' and ')}`})` : ''}`, () => {
       const slot = doc.addBitmap(template, name, img.rgba, img.width, img.height, Math.min(t.regX, img.width), Math.min(t.regY, img.height), importMode);
+      if (twins.length) {
+        const aliasSlot = ensureField(ALIAS_INDEX);
+        const text = (doc.text(aliasSlot) ?? '').replace(/\s+$/, '');
+        doc.setText(aliasSlot, [text, ...twins.map((to) => `${memberNameFor(g, letter, to, frame)}=${name}*`)].filter((l) => l.trim()).join('\n'));
+      }
       setSelected({ slot });
     });
   };
 
   const addLayer = async (letter: string) => {
-    if (!furni) return;
+    if (!furni || !doc) return;
     const g = gridModel(furni);
-    const dir = g.rows[0] ? Math.min(...g.rows[0].dirs.keys()) : 2;
+    // In the furni's main view: direction 2 when it has pictures of its own there, else its first own direction.
+    const own = [...(g.rows[0]?.dirs.entries() ?? [])].filter(([, frames]) => [...frames.values()].some((c) => !c.aliasOf)).map(([d]) => d);
+    const dir = own.includes(2) ? 2 : own.length ? Math.min(...own) : 2;
+    const before = live.current.doc;
     await addFrame(letter, dir, 0);
-    // A wall item draws only the layers its .data lists (Item Object Extension Class): add the new one, frame 0 in
-    // every state.
-    if (g.wall && doc) {
-      const dataName = `${g.cls}.data`;
-      edit(`Listed layer ${letter} in ${dataName}`, () => {
-        const slot = ensureField(dataName);
-        const text = (doc.text(slot) ?? '').trim();
-        const states = prop(lingoValue(text.replace(/[\r\n]/g, '')), 'states');
-        const n = Array.isArray(states) && states.length ? states.length : 1;
-        const entry = `${letter}:[ ${Array.from({ length: n }, () => '[ frames:[ 0 ] ]').join(', ')} ]`;
-        const outer = text.lastIndexOf(']');
-        const inner = outer > 0 ? text.lastIndexOf(']', outer - 1) : -1;
-        doc.setText(slot, inner > 0 && /layers\s*:/.test(text)
-          ? `${text.slice(0, inner).replace(/\s+$/, '')},\n${entry}\n${text.slice(inner)}`
-          : `[\nstates:[1],\nlayers:[ \n${entry}\n]\n]`);
-      });
-    }
+    // With a .data the client draws exactly the layers it lists (a wall item always has one): list the new layer,
+    // frame 0 in every state.
+    const now = live.current.doc;
+    if (!now || now !== before) return;
+    const fresh = new Furni(now);
+    if (!gridModel(fresh).rows.some((r) => r.letter === letter)) return; // no picture was picked
+    if (g.wall || readData(fresh)) edit(`Listed layer ${letter} in ${g.cls}.data`, () => listLayer(now, fresh, letter, g.wall), { group: 'addlayer' });
   };
 
   /** The text member `name`, created from another field when missing. */
@@ -657,17 +791,23 @@ export function App() {
     if (!doc || !furni) return;
     const m = furni.bySlot.get(slot);
     if (!m || !confirm(`Delete member ${m.name}?`)) return;
-    edit(`Deleted ${m.name}`, () => doc.delete(slot));
+    edit(`Deleted ${m.name}`, () => {
+      doc.delete(slot);
+      // its alias names (a mirrored direction) go with it: they would point at nothing
+      const aliasSlot = m.type === 'bitmap' ? furni.fieldSlot(ALIAS_INDEX) : undefined;
+      if (aliasSlot) {
+        const lines = (doc.text(aliasSlot) ?? '').split(/\r?\n|\r/);
+        const kept = lines.filter((l) => l.slice(l.indexOf('=') + 1).trim().replace(/\*$/, '').toLowerCase() !== m.name.toLowerCase());
+        if (kept.length !== lines.length) doc.setText(aliasSlot, kept.join('\n'));
+      }
+    });
     setSelected(null);
   };
 
   /** Why a class name can't be used, or null when it can. */
   const nameProblem = (next: string, old: string) => {
-    if (!next) return 'Give it a name';
-    if (next === old) return `It's called ${old} already`;
-    if (!/^[a-z0-9_]{1,64}$/.test(next)) return 'Lower-case letters, digits and _ only (at most 64), as the hotel takes class names';
-    if (/^(s_|poster)/.test(next)) return 's_ names a small cast and poster casts are numbered by the catalogue: pick another name';
-    return null;
+    if (next && next === old) return `It's called ${old} already`;
+    return classNameProblem(next);
   };
 
   /** The name dialog: renaming, copying a hotel furni, or the copy a hotel furni needs before it can be published. */
@@ -767,8 +907,7 @@ export function App() {
   const warningCount = issues.filter((i) => i.level === 'warning').length;
 
   // --- the icon (<class>_small), from the preview's view ---
-  const view = useRef<IconView>({ direction: 2, state: 0, colors: '' });
-  const makeIcon = (v: IconView = view.current) => {
+  const makeIcon = (v: IconView = { direction, state: viewState, colors }) => {
     if (!doc || !furni) return;
     const cls = furni.className();
     // Drawn from the 32 px cast's own pictures when it's open, else from the 64 px ones halved.
@@ -805,8 +944,33 @@ export function App() {
   };
   const fixIssue = (i: Issue) => {
     if (i.fix === 'icon') makeIcon();
+    else if (i.fix === 'shadow') shadow();
     else if (i.fix === 'small') switchSize(true);
     else if (i.fix === 'rename') askName();
+  };
+
+  /** Dragging in the room: the pictures' registration points follow the mouse (a mirrored picture the other way). */
+  const moveLayers = (targets: { slot: number; flip: boolean; regX: number; regY: number }[], dx: number, dy: number, whole: boolean) => {
+    if (!doc || !furni || !targets.length) return;
+    const seen = new Set<number>();
+    const list = targets.filter((t) => !seen.has(t.slot) && seen.add(t.slot));
+    const what = whole ? `Moved the furni ${dx >= 0 ? '+' : ''}${dx}, ${dy >= 0 ? '+' : ''}${dy} px on its tiles` : `Moved ${furni.bySlot.get(list[0].slot)?.name ?? 'the layer'} ${dx >= 0 ? '+' : ''}${dx}, ${dy >= 0 ? '+' : ''}${dy} px`;
+    edit(what, () => {
+      for (const t of list) doc.setRegPoint(t.slot, t.regX + (t.flip ? dx : -dx), t.regY - dy);
+    }, { group: `move:${list.map((t) => t.slot).join(',')}` });
+  };
+
+  /** The shadow, in the shown cast and in the other size when it's open. */
+  const shadow = () => {
+    if (!doc || !furni) return;
+    const has = gridModel(furni).shadows.filter((c) => !c.aliasOf).length;
+    if (has && !confirm(`Replace the furni's shadow (${has} picture${has > 1 ? 's' : ''}) with a plain one on its tiles?`)) return;
+    let summary = '';
+    edit('Made the shadow', () => {
+      summary = makeShadow(doc, furni);
+      if (other) makeShadow(other.doc, new Furni(other.doc));
+    }, { both: true });
+    if (summary) setStatus(summary + (other ? ', in both sizes' : '') + '. Paint it to shape it');
   };
 
   const sel = selected && furni?.bySlot.has(selected.slot) ? selected : null;
@@ -825,12 +989,31 @@ export function App() {
     e.preventDefault();
     if (/\.(cct|cst)$/i.test(file.name)) openFiles([...e.dataTransfer.files]);
     else if (/\.swf$/i.test(file.name)) importFlash(file);
-    else if (/^image\//.test(file.type) || /\.(png|gif|jpe?g)$/i.test(file.name)) {
-      const m = sel && furni?.bySlot.get(sel.slot);
-      if (m?.type === 'bitmap') importInto(m.slot, file);
-      else setStatus('Select a bitmap member first, or drop the image on a + cell');
-    }
+    else if (/^image\//.test(file.type) || /\.(png|gif|jpe?g)$/i.test(file.name)) takePicture(file);
   };
+
+  /** A picture dropped on the window or pasted: over the selected picture, or the start of a new furni. */
+  const takePicture = (file: File) => {
+    const m = sel && furni?.bySlot.get(sel.slot);
+    if (m?.type === 'bitmap') importInto(m.slot, file);
+    else if (!doc) {
+      setNewPicture(file);
+      setNewOpen(true);
+    } else setStatus('Select a picture to put it over first (or drop it on a + cell for a new frame; "New" starts a new furni from it)');
+  };
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (newOpen || painting !== null) return; // the dialog takes pictures itself
+      const t = e.target as HTMLElement | null;
+      if (t?.tagName === 'TEXTAREA' || t?.tagName === 'INPUT') return;
+      const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+      if (!file) return;
+      e.preventDefault();
+      takePicture(file);
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  });
 
   const hostName = (() => {
     try {
@@ -858,6 +1041,11 @@ export function App() {
       <button className={smallShown ? 'on' : ''} onClick={() => switchSize(true)} title={!smallShown && !other ? 'Make a small version from the large pictures' : undefined}>
         {!smallShown && !other ? <Icon name="plus" size={12} /> : <span className={`dot${(smallShown ? dirty : other?.dirty) ? ' dirty' : ''}`} />}32 px
       </button>
+      {other && !smallShown && (
+        smallFollows
+          ? <span className="follows" title="The 32 px version is made from the 64 px pictures and follows every change to them. Change the 32 px cast by hand and it becomes its own">auto</span>
+          : <button className="refresh" onClick={followAgain} title="Make the 32 px version again from the 64 px pictures (replaces what the 32 px cast has now); it then follows the large pictures"><Icon name="rotate" size={12} /></button>
+      )}
     </span>
   );
 
@@ -883,6 +1071,9 @@ export function App() {
         </div>
         <span className="tb-div" />
         <div className="tb-group">
+          <button onClick={() => setNewOpen(true)} disabled={!ready} title="A new furni from your own pictures, or empty to paint it here">
+            <Icon name="plus" />New
+          </button>
           <button onClick={openFile} disabled={!ready} title="Open a .cct, or a furni's large and small cast together (you can also drop them on the window)">
             <Icon name="folder" />Open
           </button>
@@ -942,7 +1133,9 @@ export function App() {
           <div className="popover" onMouseLeave={() => setSettingsOpen(false)}>
             <h4>Asset host</h4>
             <input value={host} onChange={(e) => setHost(e.target.value)} onBlur={() => store('furniEditor.host', host)} spellCheck={false} title="Where hof_furni casts are loaded from" />
-            <span className="muted small">Casts are loaded from here by class name; Flash imports use its chair_norja as their template.</span>
+            <span className="muted small">Casts are loaded from here by class name; Flash imports and new furni use its chair_norja as their template.</span>
+            <h4>Hotel website</h4>
+            <input value={site} onChange={(e) => setSite(e.target.value)} onBlur={() => store('furniEditor.site', site)} spellCheck={false} title="Where the Habbo in the preview room comes from (its /habbo-imaging/avatarimage)" />
             <h4>Theme</h4>
             <span className="segmented">
               {(['auto', 'light', 'dark'] as const).map((t) => (
@@ -976,6 +1169,11 @@ export function App() {
             </div>
           )}
           <div className="start-cards">
+            <button className="start-card featured" onClick={() => setNewOpen(true)} disabled={!ready}>
+              <span className="tile-icon"><Icon name="plus" size={20} /></span>
+              <b>New furni</b>
+              <span>From your own pictures (PNG, GIF, JPEG, or pasted), or empty to paint it here. It gets its tiles, shadow, icon and 32 px version by itself.</span>
+            </button>
             <button className="start-card" onClick={openFile} disabled={!ready}>
               <span className="tile-icon"><Icon name="folder" size={20} /></span>
               <b>Open a cast</b>
@@ -994,7 +1192,7 @@ export function App() {
             </button>
           </div>
           <div className="features">
-            {['Layers × directions × frames', 'Room preview with inks', 'Paint & palettes', 'Lights and glows', '64 / 32 px pair', 'Flash import'].map((f) => <span key={f}>{f}</span>)}
+            {['New furni from your pictures', 'Layers × directions × frames', 'Room preview with inks', 'Paint & palettes', 'Lights and glows', '64 / 32 px pair', 'Flash import'].map((f) => <span key={f}>{f}</span>)}
           </div>
           {!ready && <p className="loading"><span className="spinner" />Loading DirPlayer…</p>}
         </main>
@@ -1004,7 +1202,7 @@ export function App() {
             <Paint key={painting} doc={doc} furni={furni} slot={painting} edit={(what, fn) => edit(what, fn, { group: `paint:${painting}` })} onClose={() => setPainting(null)} />
           </section>
           <section className="pane center">
-            <Preview doc={doc} furni={furni} rev={rev} selected={painting} onPick={(slot) => paint(slot)} extraColors={flashColors} onView={(v) => { view.current = v; }} onMakeIcon={makeIcon} />
+            <Preview doc={doc} furni={furni} rev={rev} selected={painting} onPick={(slot) => paint(slot)} extraColors={flashColors} direction={direction} setDirection={setDirection} state={viewState} setState={setViewState} colors={colors} setColors={setColors} pose={pose} setPose={setPose} seat={seat} setSeat={setSeat} site={DEV ? '/hotel-site' : site} onMakeIcon={makeIcon} moveMode={moveMode} setMoveMode={setMoveMode} onMove={moveLayers} />
           </section>
         </main>
       ) : (
@@ -1014,14 +1212,20 @@ export function App() {
               <span className="pane-title"><Icon name="layers" size={14} />Members</span>
               <span className="spacer" />
               <span className="segmented">
-                <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')}>Furni</button>
-                <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')}>All ({furni.members.length})</button>
+                <button className={tab === 'furni' ? 'on' : ''} onClick={() => setTab('furni')} title="The furni's pictures: layers by direction and frame">Furni</button>
+                <button className={tab === 'layers' ? 'on' : ''} onClick={() => setTab('layers')} title="How each layer is drawn: ink, colour, see-through, depth">Layers</button>
+                <button className={tab === 'states' ? 'on' : ''} onClick={() => setTab('states')} title="What it shows in each state (off, on...) and what moves">States</button>
+                <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')} title="Every member of the cast">All ({furni.members.length})</button>
               </span>
             </div>
             <div className="pane-body">
               {lighting && <LightPanel doc={doc} furni={furni} edit={edit} setStatus={setStatus} onClose={() => setLighting(false)} />}
               {tab === 'furni' ? (
-                <FurniGrid onAddLight={() => setLighting(true)} doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} />
+                <FurniGrid onAddLight={() => setLighting(true)} doc={doc} furni={furni} rev={rev} small={false} selected={sel?.slot ?? null} onSelect={(slot, alias) => setSelected({ slot, alias })} onPaint={paint} onAddFrame={addFrame} onAddLayer={addLayer} onMirror={mirror} onShadow={shadow} />
+              ) : tab === 'layers' ? (
+                <LayersPanel doc={doc} furni={furni} rev={rev} edit={edit} direction={direction} state={viewState} colors={colors} setColors={setColors} selected={sel?.slot ?? null} onSelect={(slot) => setSelected({ slot })} setStatus={setStatus} />
+              ) : tab === 'states' ? (
+                <StatesPanel doc={doc} furni={furni} rev={rev} edit={edit} direction={direction} state={viewState} setState={setViewState} setStatus={setStatus} />
               ) : (
                 <table className="members">
                   <tbody>
@@ -1052,7 +1256,7 @@ export function App() {
             </div>
           </section>
           <section className="pane center">
-            <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} extraColors={flashColors} onView={(v) => { view.current = v; }} onMakeIcon={makeIcon} />
+            <Preview doc={doc} furni={furni} rev={rev} selected={sel?.slot ?? null} onPick={(slot) => setSelected({ slot })} extraColors={flashColors} direction={direction} setDirection={setDirection} state={viewState} setState={setViewState} colors={colors} setColors={setColors} pose={pose} setPose={setPose} seat={seat} setSeat={setSeat} site={DEV ? '/hotel-site' : site} onMakeIcon={makeIcon} moveMode={moveMode} setMoveMode={setMoveMode} onMove={moveLayers} />
           </section>
           <section className="pane right">
             <div className="pane-head">
@@ -1080,10 +1284,12 @@ export function App() {
         <div className="hints">
           {doc && <span><kbd>Alt</kbd><kbd>S</kbd> 64 / 32 px</span>}
           {doc && painting === null && <span>double-click: paint</span>}
+          {doc && moveMode && <span>drag: move the furni · <kbd>Alt</kbd> drag: one layer · arrows: 1 px</span>}
           {painting !== null ? <span><kbd>Esc</kbd> done · <kbd>⌘Z</kbd> undo a stroke</span> : doc && <span><kbd>⌘Z</kbd> undo</span>}
         </div>
       </footer>
-      {dragging && <div className="drop-overlay">Drop casts, a .swf or an image</div>}
+      {dragging && !newOpen && <div className="drop-overlay">Drop casts, a .swf or an image</div>}
+      {newOpen && <NewFurni initial={newPicture} onCreate={createNew} onClose={() => { setNewOpen(false); setNewPicture(null); }} />}
       {nameAsk && furni && (() => {
         const old = furni.className();
         const problem = nameProblem(nameAsk.value.trim(), old);

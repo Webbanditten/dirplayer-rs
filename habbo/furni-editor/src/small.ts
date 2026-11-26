@@ -68,3 +68,40 @@ export function makeSmall(large: CastDocument, cls: string): CastDocument {
   }
   return doc;
 }
+
+/**
+ * Whether `small` is exactly what `makeSmall` makes from `large`: then it was never touched by hand and can keep
+ * following the large cast (the editor makes it again after every change to the large pictures).
+ */
+export function madeFromLarge(large: CastDocument, small: CastDocument, cls: string): boolean {
+  let made: CastDocument | null = null;
+  try {
+    made = makeSmall(large, cls);
+    const a: Member[] = JSON.parse(made.membersJson());
+    const b: Member[] = JSON.parse(small.membersJson());
+    if (a.length !== b.length) return false;
+    const byName = new Map(b.map((m) => [m.name.toLowerCase(), m]));
+    for (const m of a) {
+      const o = byName.get(m.name.toLowerCase());
+      if (!o || o.type !== m.type) return false;
+      if (m.type === 'bitmap' && m.bitmap && o.bitmap) {
+        const x = m.bitmap, y = o.bitmap;
+        if (x.width !== y.width || x.height !== y.height || x.regX !== y.regX || x.regY !== y.regY) return false;
+        const p = made.rgba(m.slot), q = small.rgba(o.slot);
+        if (p.length !== q.length) return false;
+        // a transparent pixel is the same whatever colour it carries
+        for (let i = 0; i < p.length; i += 4) {
+          if (p[i + 3] !== q[i + 3]) return false;
+          if (p[i + 3] && (p[i] !== q[i] || p[i + 1] !== q[i + 1] || p[i + 2] !== q[i + 2])) return false;
+        }
+      } else if (m.type === 'field' || m.type === 'text') {
+        if ((made.text(m.slot) ?? '').trim() !== (small.text(o.slot) ?? '').trim()) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    made?.free();
+  }
+}

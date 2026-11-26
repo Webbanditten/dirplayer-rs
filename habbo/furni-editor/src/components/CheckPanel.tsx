@@ -5,6 +5,7 @@ const FIX_LABEL: Record<Fix, string> = {
   icon: 'Make icon',
   small: 'Make 32 px',
   rename: 'New from this…',
+  shadow: 'Make shadow',
 };
 
 interface Props {
