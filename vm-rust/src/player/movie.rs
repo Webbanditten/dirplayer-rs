@@ -335,7 +335,9 @@ impl Movie {
             )),
             BuiltInSymbol::Rollover => {
                 reserve_player_ref(|player| {
-                    let sprite = super::score::get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, false);
+                    // The sprite mouse events go to: sprites without a script are passed over (see
+                    // `the rollover` in player/mod.rs).
+                    let sprite = super::score::get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, true);
                     Ok(Datum::Int(sprite.unwrap_or(0) as i32))
                 })
             },

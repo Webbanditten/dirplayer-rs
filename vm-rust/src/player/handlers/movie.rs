@@ -1455,7 +1455,9 @@ impl MovieHandlers {
                 }
             } else {
                 // the rollOver - returns the sprite number under the mouse
-                let sprite = get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, false);
+                // the rollOver - the sprite under the mouse that mouse events go to (see `the rollover`
+                // in player/mod.rs: sprites without a script are passed over)
+                let sprite = get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, true);
                 Ok(player.alloc_datum(Datum::Int(sprite.unwrap_or(0) as i32)))
             }
         })
