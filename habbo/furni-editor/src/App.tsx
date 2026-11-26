@@ -63,15 +63,21 @@ function store(key: string, value: string) {
 
 /**
  * Housekeeping embeds the editor (OdinCMS Areas/Housekeeping/Views/FurniEditor) as
- * `?embed=housekeeping&parent=<the CMS origin>`. Messages only go to and come from that origin and the parent window:
- * the page sends `open` (a furni's casts), `published` and `status`; the editor sends `ready` and `publish` (both casts).
+ * `?embed=housekeeping&parent=<the CMS origin>`: in a frame of its page, or popped out of it into a window of its own
+ * (then the page is this window's opener). Messages only go to and come from that origin and that window:
+ * the page sends `open` (a furni's casts), `published`, `status`, `handover` (asks for what is open, to carry it to
+ * the editor in the other place) and `close` (it was carried over: close without a warning); the editor sends `ready`, `state`, `publish` (both casts) and `handover` (the open
+ * casts as they are now). From a window of its own every message says `popup: true`.
  * The editor never calls the CMS itself.
  */
 const EMBED = (() => {
   const q = new URLSearchParams(location.search);
-  if (q.get('embed') !== 'housekeeping' || window.parent === window) return null;
+  if (q.get('embed') !== 'housekeeping') return null;
+  const framed = window.parent !== window;
+  const host: Window | null = framed ? window.parent : (window.opener as Window | null);
+  if (!host) return null;
   try {
-    return { origin: new URL(q.get('parent') ?? '').origin };
+    return { origin: new URL(q.get('parent') ?? '').origin, host, popup: !framed };
   } catch {
     return null;
   }
@@ -164,9 +170,11 @@ export function App() {
   live.current = { doc, other, fileName, dirty, smallShown, smallFollows };
   const keys = (small: boolean): [SideKey, SideKey] => (small ? ['small', 'large'] : ['large', 'small']);
 
+  /** Housekeeping carried what is open here to the editor in the other place: nothing is lost by closing this one. */
+  const released = useRef(false);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
-      if (dirty || other?.dirty) e.preventDefault();
+      if ((dirty || other?.dirty) && !released.current) e.preventDefault();
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
@@ -207,7 +215,7 @@ export function App() {
 
   /** Open a cast, or a large and a small cast together (the large one is shown first). */
   const open = useCallback(
-    (bytes: Uint8Array, name: string, pair?: { bytes: Uint8Array; name: string }) => {
+    (bytes: Uint8Array, name: string, pair?: { bytes: Uint8Array; name: string }, changed = false) => {
       if (anyDirty && !confirm('Discard the changes to the open cast?')) return;
       let next: CastDocument | null = null;
       try {
@@ -218,7 +226,7 @@ export function App() {
           [next, pairDoc] = [pairDoc, next];
           [mainName, pairName] = [pairName, mainName];
         }
-        show(next, mainName, false, pairDoc ? { doc: pairDoc, name: pairName, dirty: false } : null);
+        show(next, mainName, changed, pairDoc ? { doc: pairDoc, name: pairName, dirty: changed } : null);
         setFlashColors([]);
         const f = new Furni(next);
         setStatus(`Opened ${mainName}${pairDoc ? ` and ${pairName}` : ''}: ${f.members.length} members, class ${f.className() || '?'}`);
@@ -548,13 +556,52 @@ export function App() {
 
   // --- Housekeeping ---
   const [hotelFurni, setHotelFurni] = useState<{ sprite: string; madeHere: boolean } | null>(null);
-  const toParent = (message: unknown, transfer: Transferable[] = []) => EMBED && window.parent.postMessage(message, EMBED.origin, transfer);
+  /** A message to Housekeeping's page. False when it can't be reached (this is a window of its own and the page is closed). */
+  const toParent = (message: Record<string, unknown>, transfer: Transferable[] = []): boolean => {
+    if (!EMBED || EMBED.host.closed) return false;
+    EMBED.host.postMessage(EMBED.popup ? { ...message, popup: true } : message, EMBED.origin, transfer);
+    return true;
+  };
+  /** What is open, as it is now (unsaved changes included), for the editor in the other place (the page or the window). */
+  const handOver = useRef<() => void>(() => undefined);
+  handOver.current = () => {
+    if (!doc || !furni) return void toParent({ type: 'handover' });
+    try {
+      const buf = (b: Uint8Array) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+      const mine = { name: fileName, bytes: buf(doc.save()) };
+      const theirs = other ? { name: other.name, bytes: buf(other.doc.save()) } : undefined;
+      const [large, small] = furni.isSmallCast() ? [theirs, mine] : [mine, theirs];
+      toParent(
+        { type: 'handover', sprite: furni.className(), large, small, colors: flashColors, shown: colors, hotel: hotelFurni, dirty: anyDirty, height: seat },
+        [large, small].flatMap((c) => (c ? [c.bytes] : [])),
+      );
+    } catch (e) {
+      console.error('handover', e);
+      toParent({ type: 'handover' });
+    }
+  };
   useEffect(() => {
     if (!EMBED || !ready) return;
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== EMBED.origin || e.source !== window.parent) return;
+      if (e.origin !== EMBED.origin || e.source !== EMBED.host) return;
       const m = e.data ?? {};
-      if (m.type === 'open' && (m.large?.bytes instanceof ArrayBuffer || m.small?.bytes instanceof ArrayBuffer)) {
+      if (m.type === 'handover') {
+        handOver.current();
+      } else if (m.type === 'close') {
+        // what was open here is in the other editor now
+        released.current = true;
+        if (EMBED.popup) window.close();
+      } else if (m.type === 'open' && m.handover && (m.large?.bytes instanceof ArrayBuffer || m.small?.bytes instanceof ArrayBuffer)) {
+        // what the editor in the other place had open, carried over as it was: unsaved work stays unsaved
+        const first = m.large ?? m.small;
+        const pair = m.large && m.small ? { bytes: new Uint8Array(m.small.bytes), name: String(m.small.name) } : undefined;
+        open(new Uint8Array(first.bytes), String(first.name), pair, !!m.dirty);
+        if (Array.isArray(m.colors)) setFlashColors(m.colors.filter((c: { colour?: unknown }) => typeof c?.colour === 'string'));
+        if (typeof m.shown === 'string') setColors(m.shown);
+        setHotelFurni(m.hotel && typeof m.hotel.sprite === 'string' ? { sprite: m.hotel.sprite, madeHere: !!m.hotel.madeHere } : null);
+        if (typeof m.height === 'number' && m.height >= 0) setSeat(m.height);
+        setStatus(`${m.sprite || first.name} is here now, as it was${m.dirty ? ' (with its unsaved changes)' : ''}. Publish… still goes to Housekeeping${EMBED.popup ? "'s window" : ''}`);
+      } else if (m.type === 'open' && (m.large?.bytes instanceof ArrayBuffer || m.small?.bytes instanceof ArrayBuffer)) {
         const first = m.large ?? m.small;
         const pair = m.large && m.small ? { bytes: new Uint8Array(m.small.bytes), name: String(m.small.name) } : undefined;
         open(new Uint8Array(first.bytes), String(first.name), pair);
@@ -603,8 +650,10 @@ export function App() {
       const msg = { type: 'publish', sprite: cls, large: buf(large), small: small ? buf(small) : undefined, colour: colors.trim() || flashColors[0]?.colour, states, wall: openWall,
         // what the Habbo in the room was set to: the kind of furni and its seat height
         kind: pose === 'sit' ? 'seat' : pose === 'lay' ? 'bed' : undefined, height: pose === 'sit' || pose === 'lay' ? seat : undefined };
-      toParent(msg, [msg.large, ...(msg.small ? [msg.small] : [])]);
-      setStatus(`Sent ${cls} to Housekeeping: confirm it in the panel on the left (the check report and its definition)`);
+      if (!toParent(msg, [msg.large, ...(msg.small ? [msg.small] : [])])) {
+        return setStatus("Housekeeping's page is closed: open its furni editor page again and use its \"own window\" button (Download keeps what is open here as files)");
+      }
+      setStatus(`Sent ${cls} to Housekeeping: confirm it in ${EMBED?.popup ? "Housekeeping's window" : 'the panel on the left'} (the check report and its definition)`);
     } catch (e) {
       setStatus(`Couldn't save the casts: ${e}`);
     }
