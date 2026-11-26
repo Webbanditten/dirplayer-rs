@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CastDocument, SwfDocument, decodeImage, download, encodePng, loadWasm, pickFile, pickFiles } from './wasm';
 import { buildCast, planFlash, splitPlan } from './flash';
 import { largeFileName, madeFromLarge, makeSmall, smallFileName } from './small';
-import { ALIAS_INDEX, ASSET_INDEX, Furni, isWallItem, parseMemberName } from './furni';
+import { ALIAS_INDEX, ASSET_INDEX, Furni, isWallItem, parseMemberName, stateNames } from './furni';
 import { History, type SideKey, type Snap, type Step } from './history';
 import { clearAutosave, loadAutosave, writeAutosave, type Autosave } from './autosave';
 import { checkFurni, type Issue } from './check';
@@ -671,8 +671,11 @@ export function App() {
       const [large, small] = furni.isSmallCast() ? [theirs, mine] : [mine, theirs];
       if (!large) return setStatus(`Only the small cast is open: open or make the large one (${largeFileName(cls)}) too`);
       const buf = (b: Uint8Array) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
-      const states = stateCount(readData(new Furni(furni.isSmallCast() && other ? other.doc : doc)));
+      const data = readData(new Furni(furni.isSmallCast() && other ? other.doc : doc));
+      const states = stateCount(data);
       const msg = { type: 'publish', sprite: cls, large: buf(large), small: small ? buf(small) : undefined, colour: colors.trim() || flashColors[0]?.colour, states, wall: openWall,
+        // the states' names, for the publish form ("3 states: off, on, party")
+        stateNames: data && states > 1 ? stateNames(data) : undefined,
         // what the Habbo in the room was set to: the kind of furni and its seat height
         kind: pose === 'sit' ? 'seat' : pose === 'lay' ? 'bed' : undefined, height: pose === 'sit' || pose === 'lay' ? seat : undefined };
       if (!toParent(msg, [msg.large, ...(msg.small ? [msg.small] : [])])) {
@@ -933,8 +936,9 @@ export function App() {
     const next = (nextName ?? '').trim();
     const problem = nameProblem(next, old);
     if (problem) return setStatus(problem), false;
-    const re = new RegExp(`^(s_)?${old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[_.]|$)`, 'i');
-    const swap = (s: string) => s.replace(re, (_m, small) => (small ?? '') + next);
+    // A wall item's pictures have the wall in front of the class: "leftwall <class>_a_0", "s_rightwall <class>_b_1".
+    const re = new RegExp(`^(s_)?((?:left|right)wall )?${old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[_.]|$)`, 'i');
+    const swap = (s: string) => s.replace(re, (_m, small, wall) => (small ?? '') + (wall ?? '') + next);
     // Members borrowed from other furni (drken_pixel, sofachair_silo_d_...) get the new name in front too: a furni's
     // cast may only name its own members (the hotel checks), and the copy stays independent of the other furni.
     const shared = new Set([ALIAS_INDEX, ASSET_INDEX, 'copyright']);
