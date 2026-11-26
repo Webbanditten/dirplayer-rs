@@ -259,6 +259,27 @@ export function planFlash(swf: SwfDocument, fileName: string, options: FlashOpti
   for (const [base, frames] of groups) {
     if (!frames.has(0)) bitmaps.push({ name: `${base}_0`, imageId: -1, width: 1, height: 1, flip: false, regX: 0, regY: 0, empty: true });
   }
+  // A layer the Flash file has no picture of in one direction isn't drawn there. The client would fall back on the
+  // layer's direction 0 picture instead (xmas11_luxsofa1's layer d in direction 4), so it gets an empty one.
+  const byFurni = new Map<string, Map<string, Set<string>>>(); // "<pre><sprite>|<w>_<l>" -> layer -> its directions
+  for (const base of groups.keys()) {
+    const m = /^(.*)_([a-z])_0_(\d+_\d+)_(\d+)$/.exec(base);
+    if (!m) continue;
+    const key = `${m[1]}|${m[3]}`;
+    if (!byFurni.has(key)) byFurni.set(key, new Map());
+    const letters = byFurni.get(key)!;
+    if (!letters.has(m[2])) letters.set(m[2], new Set());
+    letters.get(m[2])!.add(m[4]);
+  }
+  for (const [key, letters] of byFurni) {
+    const [stem, dims] = key.split('|');
+    const all = new Set([...letters.values()].flatMap((dirs) => [...dirs]));
+    for (const [letter, dirs] of letters) {
+      for (const d of all) {
+        if (!dirs.has(d)) bitmaps.push({ name: `${stem}_${letter}_0_${dims}_${d}_0`, imageId: -1, width: 1, height: 1, flip: false, regX: 0, regY: 0, empty: true });
+      }
+    }
+  }
 
   const fields: { name: string; text: string }[] = [];
   const colors: FlashPlan['colors'] = [];

@@ -288,10 +288,27 @@ function checkSide(side: SideKey, furni: Furni, out: Issue[]) {
 /** Compare the two sizes: every large picture should have its 32 px one. */
 function checkPair(large: Furni, small: Furni, out: Issue[]) {
   const a = gridModel(large, false), b = gridModel(small, true);
+  // The 32 px size animates by its own .data, and Sulake's often runs a shorter animation there with fewer pictures
+  // (xmas11_balloon: frames 0-3 at 64 px, 0-1 at 32 px). So a frame only has to be there when the 32 px .data shows
+  // it; every layer's frame 0 always.
+  const smallData = (() => {
+    const text = small.text(`${b.cls}.data`);
+    if (!text) return null;
+    try {
+      return parseLingo(text.replace(/\r?\n|\r/g, ' '));
+    } catch {
+      return null;
+    }
+  })();
+  const shown = (letter: string, f: number) => {
+    if (f === 0 || !smallData) return true;
+    const states = layerData(smallData, letter);
+    return !Array.isArray(states) || states.some((e) => framesOf(e).includes(f));
+  };
   const missing: string[] = [];
   for (const r of a.rows) {
     const other = b.rows.find((x) => x.letter === r.letter);
-    for (const [d, frames] of r.dirs) for (const f of frames.keys()) if (!other?.dirs.get(d)?.has(f)) missing.push(`${r.letter} ${d}/${f}`);
+    for (const [d, frames] of r.dirs) for (const f of frames.keys()) if (!other?.dirs.get(d)?.has(f) && shown(r.letter, f)) missing.push(`${r.letter} ${d}/${f}`);
   }
   if (missing.length) {
     out.push({ level: 'warning', side: 'small', text: `The 32 px cast lacks ${missing.length} of the large pictures (layer direction/frame): ${missing.slice(0, LIST).join(', ')}${missing.length > LIST ? '…' : ''}. In small rooms those show the direction 0 picture or nothing` });
