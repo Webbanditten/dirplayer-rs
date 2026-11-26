@@ -985,6 +985,23 @@ pub async fn run_player_command(command: PlayerVMCommand) -> Result<DatumRef, Sc
                 return Ok(DatumRef::Void);
             }
 
+            // The topmost scripted sprite under the pointer at release, when it is not the
+            // pressed one. Director sends it the mouseUp, and the pressed sprite gets
+            // mouseUpOutSide. Habbo's "event agent" relies on this: a tiny topmost sprite
+            // that follows the pointer while a slider is dragged and ends the drag on its
+            // own mouseUp (room dimmer slider, sound machine play head). With the mouseUp
+            // only going to the pressed sprite, those drags never ended.
+            let release_redirect: Option<i16> = reserve_player_ref(|player| {
+                let pressed = player.mouse_down_sprite;
+                if pressed <= 0 {
+                    return None;
+                }
+                match get_sprite_at(player, x, y, true) {
+                    Some(n) if n as i16 != pressed => Some(n as i16),
+                    _ => None,
+                }
+            });
+
             // Update mouse state and determine which sprite to notify
             let result = reserve_player_mut(|player| {
                 player.mouse_loc = (x, y);
@@ -1013,7 +1030,7 @@ pub async fn run_player_command(command: PlayerVMCommand) -> Result<DatumRef, Sc
                 };
                 player.mouse_down_sprite = -1;
                 if let Some(sprite) = sprite {
-                    let is_inside = concrete_sprite_hit_test(player, sprite, x, y);
+                    let is_inside = release_redirect.is_none() && concrete_sprite_hit_test(player, sprite, x, y);
                     Some((sprite.script_instance_list.clone(), is_inside, sprite_num_to_notify))
                 } else {
                     None
@@ -1103,6 +1120,16 @@ pub async fn run_player_command(command: PlayerVMCommand) -> Result<DatumRef, Sc
                 player_invoke_frame_and_movie_scripts(
                     Symbol::builtin(BuiltInSymbol::MouseUp),
                     &vec![]
+                ).await;
+            }
+
+            // The sprite the button was released over gets the mouseUp (see release_redirect).
+            if let Some(release_sprite) = release_redirect {
+                debug!("[mouseUp] released over sprite#{} (pressed elsewhere)", release_sprite);
+                player_dispatch_event_to_sprite_targeted(
+                    Symbol::builtin(BuiltInSymbol::MouseUp),
+                    &vec![],
+                    release_sprite as u16,
                 ).await;
             }
 

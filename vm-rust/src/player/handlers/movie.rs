@@ -1006,13 +1006,16 @@ impl MovieHandlers {
         }
         let (url, target) = reserve_player_ref(|player| {
             let url = player.get_datum(&args[0]).string_value()?;
-            let target = if args.len() > 1 {
-                player
-                    .get_datum(&args[1])
-                    .string_value()
-                    .unwrap_or_else(|_| "_blank".to_string())
-            } else {
-                "_blank".to_string()
+            // Director: "If targetName is omitted, the new page replaces the current
+            // page containing the movie." Habbo's openNetPage passes VOID for its
+            // "self" target (logout -> url_logout_timeout, hotel links); opening a
+            // new tab there left the dead client behind.
+            let target = match args.get(1).map(|a| player.get_datum(a)) {
+                None | Some(Datum::Void) => "_self".to_string(),
+                Some(d) => match d.string_value() {
+                    Ok(t) if !t.is_empty() => t,
+                    _ => "_self".to_string(),
+                },
             };
             Ok::<(String, String), ScriptError>((url, target))
         })?;
@@ -1452,7 +1455,9 @@ impl MovieHandlers {
                 }
             } else {
                 // the rollOver - returns the sprite number under the mouse
-                let sprite = get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, false);
+                // the rollOver - the sprite under the mouse that mouse events go to (see `the rollover`
+                // in player/mod.rs: sprites without a script are passed over)
+                let sprite = get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, true);
                 Ok(player.alloc_datum(Datum::Int(sprite.unwrap_or(0) as i32)))
             }
         })

@@ -335,7 +335,9 @@ impl Movie {
             )),
             BuiltInSymbol::Rollover => {
                 reserve_player_ref(|player| {
-                    let sprite = super::score::get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, false);
+                    // The sprite mouse events go to: sprites without a script are passed over (see
+                    // `the rollover` in player/mod.rs).
+                    let sprite = super::score::get_sprite_at(player, player.mouse_loc.0, player.mouse_loc.1, true);
                     Ok(Datum::Int(sprite.unwrap_or(0) as i32))
                 })
             },
@@ -407,9 +409,20 @@ impl Movie {
                 })
             },
             BuiltInSymbol::DesktopRectList => {
+                // Director returns the monitors' rects. Movies use it to pick a
+                // stage size: Habbo's `prepareMovie` (habbo.dcr Initialization)
+                // only doubles the stage to 1440x1080 for `dynamicResolution`
+                // when the desktop is at least that big, so returning the movie's
+                // own rect (as before) could never pass. Use the browser's screen
+                // size in CSS pixels; fall back to the movie rect off the web.
+                let screen = web_sys::window().and_then(|w| {
+                    let screen = js_sys::Reflect::get(&w, &"screen".into()).ok()?;
+                    let sw = js_sys::Reflect::get(&screen, &"width".into()).ok()?.as_f64()?;
+                    let sh = js_sys::Reflect::get(&screen, &"height".into()).ok()?.as_f64()?;
+                    if sw > 0.0 && sh > 0.0 { Some((sw as i32, sh as i32)) } else { None }
+                });
                 reserve_player_mut(|player| {
-                    let w = player.movie.rect.right as i32;
-                    let h = player.movie.rect.bottom as i32;
+                    let (w, h) = screen.unwrap_or((player.movie.rect.right as i32, player.movie.rect.bottom as i32));
                     let rect = player.alloc_datum(Datum::Rect([0.0, 0.0, w as f64, h as f64], 0));
                     Ok(Datum::List(
                         crate::director::lingo::datum::DatumType::List,

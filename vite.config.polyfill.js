@@ -44,6 +44,34 @@ function injectCss() {
   };
 }
 
+/**
+ * wasm-bindgen's glue falls back to `new URL('vm_rust_bg.wasm', import.meta.url)` when init() gets no
+ * module. Library mode inlines that as an 11 MB base64 data URL, a second copy of the VM next to the
+ * deflated one from embed-resources. The polyfill always passes the embedded blob URL, so drop the fallback.
+ */
+function dropDefaultWasmUrl() {
+  const DEFAULT_URL = "new URL('vm_rust_bg.wasm', import.meta.url)";
+  return {
+    name: "drop-default-wasm-url",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.replace(/\\/g, "/").endsWith("vm-rust/pkg/vm_rust.js")) {
+        return null;
+      }
+      if (!code.includes(DEFAULT_URL)) {
+        this.error(`drop-default-wasm-url: ${DEFAULT_URL} not found in ${id}; update the plugin`);
+      }
+      return {
+        code: code.replace(
+          DEFAULT_URL,
+          "(() => { throw new Error('[DirPlayer] init() needs the embedded WASM URL'); })()",
+        ),
+        map: null,
+      };
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   // Don't copy public folder for library build
@@ -82,6 +110,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    dropDefaultWasmUrl(),
     react(),
     svgr({
       svgrOptions: {

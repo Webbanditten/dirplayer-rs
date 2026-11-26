@@ -770,6 +770,8 @@ impl WebGL2Renderer {
 
     pub fn draw_frame(&mut self, player: &mut DirPlayer) {
         self.frame_count += 1;
+        crate::player::habbo_depth::refresh(player);
+        crate::player::habbo_hit::refresh(player);
         // Increment sprite debug frame counter
         let df = SPRITE_DEBUG_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -1551,10 +1553,35 @@ impl WebGL2Renderer {
             // test ran a few lines further down before, after the clones.)
             {
                 let (stage_w, stage_h) = self.size;
-                if rect.right <= 0
-                    || rect.bottom <= 0
-                    || rect.left >= stage_w as i32
-                    || rect.top >= stage_h as i32
+                // `rect` is the UNtransformed rect. A rotated or skewed sprite is
+                // drawn transformed around its loc and can land somewhere else
+                // entirely: Habbo mirrors furni with rotation 180 + skew 180, so a
+                // part whose plain rect sits past the right edge is drawn mirrored
+                // inside the stage (Grunge Madras in Gyden lost its last part).
+                // Cull those on a box around the loc that covers any rotation.
+                let (left, top, right, bottom) = if sprite.rotation != 0.0 || sprite.skew != 0.0 {
+                    // `rect` is in canvas pixels (drawRect-scaled), so the loc must be too.
+                    let (cx, cy) = crate::player::stage::movie_to_canvas_point(
+                        player, sprite.loc_h as f64, sprite.loc_v as f64,
+                    );
+                    let r = [
+                        (rect.left as f64, rect.top as f64),
+                        (rect.right as f64, rect.top as f64),
+                        (rect.left as f64, rect.bottom as f64),
+                        (rect.right as f64, rect.bottom as f64),
+                    ]
+                    .iter()
+                    .map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt())
+                    .fold(0.0f64, f64::max)
+                    .ceil() as i32;
+                    (cx as i32 - r, cy as i32 - r, cx as i32 + r, cy as i32 + r)
+                } else {
+                    (rect.left, rect.top, rect.right, rect.bottom)
+                };
+                if right <= 0
+                    || bottom <= 0
+                    || left >= stage_w as i32
+                    || top >= stage_h as i32
                 {
                     return;
                 }
@@ -1594,7 +1621,15 @@ impl WebGL2Renderer {
                 sprite.has_fore_color,
                 sprite.has_back_color,
                 sprite.puppet,
-                (sprite.loc_h, sprite.loc_v),
+                // In canvas pixels like `rect`: it is the rotation and skew pivot.
+                // Left in movie space, a 2x drawRect (Habbo's large client) mirrored
+                // furni (rotation 180 + skew 180) around half their real position.
+                {
+                    let (x, y) = crate::player::stage::movie_to_canvas_point(
+                        player, sprite.loc_h as f64, sprite.loc_v as f64,
+                    );
+                    (x.round() as i32, y.round() as i32)
+                },
                 sprite.width,
                 sprite.height,
                 w3d_cam,
@@ -3487,6 +3522,13 @@ impl WebGL2Renderer {
         // Note: Ink 40 does NOT use foreColor tinting - it just uses color-key transparency
         let is_indexed = bitmap_bit_depth >= 1 && bitmap_bit_depth <= 8;
         let is_ink36_indexed = is_indexed && ink == 36;
+        // Habbo fork: a sprite's foreColor/bgColor don't tint a 32-bit bitmap member under ink
+        // 0/8/9. Habbo's Fuse windows pass an element's #color/#bgColor both to copyPixels (into
+        // the element's own 32-bit buffer, which tints it) and to the sprite showing that buffer,
+        // so tinting here too applied the colour twice: the pet status window's #EFEFEF text
+        // fields came out 224 grey instead of 239. Upstream keeps the sprite tint for Coke
+        // Studios (DiscoLight); see habbo/README.md. Text, shapes and film loops are unchanged.
+        let sprite_tints_32bit = !matches!(texture_source, TextureSource::Bitmap { .. });
 
         let colorize_params = if bitmap_bit_depth == 1 && (ink == 0 || ink == 1 || ink == 36) {
             // Ink 1 (Transparent) colorizes a 1-bit bitmap exactly as Copy and
@@ -3541,7 +3583,7 @@ impl WebGL2Renderer {
             //   shape renders its raw pink gradient and blends pink over
             //   the destination instead of producing the wood-tinted
             //   color the texturecolor multiply was meant to give.
-            (bitmap_bit_depth == 32 && (ink == 0 || ink == 8 || ink == 9 || ink == 36)) ||
+            (bitmap_bit_depth == 32 && (ink == 36 || (sprite_tints_32bit && (ink == 0 || ink == 8 || ink == 9)))) ||
             // Indexed (2-8 bit) colorize: ink 0 (Copy palette interpolation),
             // ink 8 (Matte) and ink 9 (Mask) — all three apply the
             // foreColor→bgColor lerp on near-grayscale pixels in
@@ -5174,6 +5216,16 @@ impl WebGL2Renderer {
                     } else {
                         255
                     }
+                } else if (should_use_colorkey_ink33 || should_use_colorkey_ink35) && (r, g, b) == (255, 255, 255) {
+                    // Add Pin / Sub Pin: the bitmap's white background is transparent even
+                    // when the sprite carries a coloured bgColor. Director colorizes an
+                    // indexed bitmap first (white -> bgColor), so the bgColor key then drops
+                    // those pixels; the shader keys on the raw texel and missed them.
+                    // Habbo sets every furni sprite's bgColor to the item's part colour,
+                    // including the ink-33 loading placeholder, which therefore drew a white
+                    // square around the ghost box on coloured furni. With the default white
+                    // bgColor these pixels were already keyed, so nothing else changes.
+                    0
                 } else if should_use_colorkey_ink3 || should_use_colorkey_ink33 || should_use_colorkey_ink35 || should_use_colorkey_ink36 || should_use_colorkey_ink37 || should_use_colorkey_ink39 {
                     // Ink 3/33/35/36/37/39 color-key transparency is handled by shader
                     // The shader compares pixel RGB with bgColor uniform
@@ -5341,16 +5393,25 @@ impl WebGL2Renderer {
                                         (r, g, b)
                                     }
                                 } else {
-                                    // General indexed colorize
-                                    let max = (1u16 << bitmap.original_bit_depth) - 1;
-                                    let t = i as f32 / max as f32;
-
+                                    // General indexed colorize. Director maps black to the
+                                    // foreColor and white to the backColor, blending each
+                                    // channel by the pixel's own palette colour:
+                                    // out.c = mix(fg.c, bg.c, src.c). The palette index is
+                                    // not a brightness: it only works where index 0 is black
+                                    // (systemWin). On #systemMac bitmaps (Habbo's post-its:
+                                    // white 0, greys 245-254, black 255) an index ramp painted
+                                    // the black outline in the bgColor and dark-tinted the
+                                    // coloured pixels, so notes came out as flat yellow blobs.
                                     if (has_fore || has_back) && use_back_color {
-                                        // Interpolate between fg and bg based on palette index
+                                        let eff_fg = if has_fore { fg_rgb } else { (0u8, 0u8, 0u8) };
+                                        let eff_bg = if has_back { bg_rgb } else { (255u8, 255u8, 255u8) };
+                                        let mix = |lo: u8, hi: u8, s: u8| -> u8 {
+                                            ((lo as u16 * (255 - s as u16) + hi as u16 * s as u16) / 255) as u8
+                                        };
                                         (
-                                            ((1.0 - t) * fg_rgb.0 as f32 + t * bg_rgb.0 as f32) as u8,
-                                            ((1.0 - t) * fg_rgb.1 as f32 + t * bg_rgb.1 as f32) as u8,
-                                            ((1.0 - t) * fg_rgb.2 as f32 + t * bg_rgb.2 as f32) as u8,
+                                            mix(eff_fg.0, eff_bg.0, r),
+                                            mix(eff_fg.1, eff_bg.1, g),
+                                            mix(eff_fg.2, eff_bg.2, b),
                                         )
                                     } else if has_fore && i == 0 {
                                         // Replace palette index 0 with fg color
@@ -5366,6 +5427,21 @@ impl WebGL2Renderer {
                     }
                 } else {
                     (r, g, b)
+                };
+
+                // Ink 36 keys the colorized pixel, as ink 33/35 do above: Director tints
+                // first (white -> bgColor), then drops bgColor. Habbo's window text
+                // elements draw a white-backed text image through a sprite with
+                // foreColor white, bgColor black and ink 36 ("Kun baggrund" in the room
+                // dimmer); keyed on the raw white texel, the background became a black box.
+                let a = if should_use_colorkey_ink36
+                    && a > 0
+                    && (has_fore || has_back)
+                    && Some((final_r, final_g, final_b)) == sprite_bg_color
+                {
+                    0
+                } else {
+                    a
                 };
 
                 if a > 0 {

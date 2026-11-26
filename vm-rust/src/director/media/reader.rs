@@ -9,19 +9,15 @@ pub trait MediaReader {
 
 impl MediaReader for BinaryReader {
     fn read_media(&mut self) -> Result<Media, std::io::Error> {
+        // The first u32 is not a format magic. Real Shockwave clients write many
+        // different values there for the same kind of media: Habbo Danmark's 194
+        // stored camera photos (all 8-bit, all viewable in Shockwave) start with
+        // 0xA8A41468, 0xE8921468, 0x18438963, 0x60741868, 0xE8920701, 0xA8A40501
+        // and a dozen more. It looks like a leftover handle/pointer, and
+        // Shockwave ignores it when reading, so we do too. A blob that isn't
+        // bitmap media still fails below, at the BITD/DTIB chunk check.
         let magic = self.read_u32()?;
-        match magic {
-            // Known bitmap-media magics:
-            //   0x18438963 — indexed PixMap; what real Shockwave emits for
-            //                <=8-bit media (v7 camera photos). Ground truth.
-            //   0xE8921468 — direct-color; the form dirplayer historically
-            //                wrote (and still writes for >8-bit media).
-            //   0x88811468 — an interim value dirplayer briefly wrote for
-            //                indexed media; accepted so already-stored photos
-            //                still load.
-            // The metadata parse below masks the rowBytes PixMap flag and
-            // ignores the format byte, so the body is identical for all three.
-            0xE8921468 | 0x88811468 | 0x18438963 => {
+        {
                 let metadata = self.read_bitmap_media_metadata()?;
                 let chunk_id = self.read_u32()?;
                 let endian = if chunk_id == FOURCC("BITD") {
@@ -47,8 +43,6 @@ impl MediaReader for BinaryReader {
                         std::io::Error::new(std::io::ErrorKind::InvalidData, "decompress_bitmap failed")
                     })?;
                 Ok(Media::Bitmap { bitmap: decompressed, reg_point: (metadata.reg_y, metadata.reg_x) })
-            }
-            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Unknown media magic number: {}", magic))),
         }
     }
 

@@ -95,6 +95,21 @@ impl MediaChunk {
             );
         }
 
+        // A bare MP3 stream: the chunk starts with an MPEG frame sync, no Director sound
+        // header. Habbo's hh_room_disco keeps "dj_fuse" (Club 57's dance floor music) like
+        // this. Parsed as a header, the frame bytes gave headerSize 0xFFFB9064, the skip ran
+        // past the end and the member came out silent with rate 0.
+        if data_test.len() >= 4 && data_test[0] == 0xFF && (data_test[1] & 0xE0) == 0xE0 {
+            debug!("MediaChunk: bare MP3 stream ({} bytes), no sound header", data_test.len());
+            return Ok(MediaChunk {
+                sample_rate: Self::get_mp3_sample_rate(&data_test[0..4]).unwrap_or(0),
+                data_size_field: data_test.len() as u32,
+                guid: None,
+                audio_data: data_test,
+                is_compressed: true,
+            });
+        }
+
         let original_endian = reader.endian;
         reader.endian = Endian::Big;
 

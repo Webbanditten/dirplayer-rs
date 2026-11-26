@@ -2026,6 +2026,7 @@ impl BuiltInHandlerManager {
                         .find_member_by_ref(&member_ref)
                         .ok_or_else(|| ScriptError::new("Member not found".to_string()))?;
 
+                    let is_text_member = matches!(member.member_type, crate::player::cast_member::CastMemberType::Text(_));
                     let (text, fixed_line_space, top_spacing, char_spacing, member_width, font_name, font_size, alignment, tab_stops, word_wrap) = match &member.member_type {
                         crate::player::cast_member::CastMemberType::Text(t) => {
                             (t.text.clone(), t.fixed_line_space, t.top_spacing, t.char_spacing as i16, t.width as i16, t.font.clone(), t.font_size, t.alignment.clone(), t.tab_stops.clone(), t.word_wrap)
@@ -2299,7 +2300,15 @@ impl BuiltInHandlerManager {
                             // a click on visual "Christ's passion" maps
                             // into the following "the sign of the cross"
                             // chunk.
-                            min_space_advance: {
+                            // Fields are drawn with that clamp; TEXT members are not
+                            // (text.rs renders with min_space_advance None). For a pixel
+                            // PFR font the clamp also overshoots badly: it uses the atlas
+                            // cell height, so Habbo's Volter (9pt, 5px space) got 8px
+                            // spaces here, and chat bubbles, sized from charPosToLoc of the
+                            // last char, grew a gap at the end that grew with the message.
+                            min_space_advance: if is_text_member {
+                                None
+                            } else {
                                 let sz = font.font_size.max(font.char_height) as i32;
                                 let v = ((sz as f32) * 0.30).round() as i16;
                                 if v > 0 { Some(v) } else { None }

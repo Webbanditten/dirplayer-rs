@@ -1,4 +1,3 @@
-use num::ToPrimitive;
 
 use crate::{
     director::lingo::datum::{datum_bool, Datum},
@@ -118,7 +117,9 @@ impl CompareBytecodeHandler {
             let is_not = match obj {
                 Datum::Void => true,
                 Datum::Int(num) => *num == 0,
-                Datum::Float(num) => num.to_u64().unwrap() == 0,
+                // Truncated toward zero like the old to_u64() test, which panicked on
+                // negative floats (`not -1.5`).
+                Datum::Float(num) => num.trunc() == 0.0,
                 _ => false,
             };
             let result_id = player.alloc_datum(datum_bool(is_not));

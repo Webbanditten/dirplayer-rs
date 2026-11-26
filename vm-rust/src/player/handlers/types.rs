@@ -555,6 +555,17 @@ impl TypeHandlers {
                         Ok(datum_ref)
                     }
                     Err(err) => {
+                        // "The value of the initial portion of the expression up to the
+                        // first syntax error" (11.5 Scripting Dictionary), for the case of a
+                        // leading number followed by a separator: value("2,1,2,#0053F7,77")
+                        // is 2. Habbo's wall items rely on it: the Item Object Extension
+                        // class keeps tProps[#type] as the state only when value() of it is
+                        // a non-zero integer, so the room dimmer's "state,preset,effect,
+                        // colour,lightness" string became 1 and its effect never applied
+                        // on room entry.
+                        if let Some(number) = leading_number_before_separator(&s) {
+                            return reserve_player_mut(|player| Ok(player.alloc_datum(number)));
+                        }
                         if !is_expected_value_retry_fragment(&s, &cleaned) {
                             warn!(
                                 "[value()] parse error → Void — input={:?} cleaned={:?} err={}",
@@ -2450,6 +2461,45 @@ impl TypeHandlers {
 /// double quote (the `QUOTE` constant is used instead), so a simple in-string
 /// toggle is sufficient. If the brackets never balance, `s` is returned as-is
 /// so the normal parser still reports the error.
+/// A leading integer or decimal literal followed by a separator (comma, whitespace, `;`, ...), for
+/// `value()`'s "initial portion up to the first syntax error". `"12abc"` and plain words are not
+/// matched, so they keep failing to VOID.
+pub(crate) fn leading_number_before_separator(s: &str) -> Option<Datum> {
+    let t = s.trim_start();
+    let bytes = t.as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && (bytes[i] == b'-' || bytes[i] == b'+') {
+        i += 1;
+    }
+    let digits_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == digits_start {
+        return None;
+    }
+    let mut is_float = false;
+    if i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1].is_ascii_digit() {
+        is_float = true;
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    // Something must follow (otherwise the full parse would have succeeded), and it must be a
+    // separator rather than part of a word.
+    let next = *bytes.get(i)?;
+    if next.is_ascii_alphanumeric() || next == b'_' || next == b'.' {
+        return None;
+    }
+    let literal = &t[..i];
+    if is_float {
+        literal.parse::<f64>().ok().map(Datum::Float)
+    } else {
+        literal.parse::<i32>().ok().map(Datum::Int)
+    }
+}
+
 pub(crate) fn truncate_to_first_balanced_list(s: &str) -> String {
     let trimmed_start = s.len() - s.trim_start().len();
     let bytes = s.as_bytes();

@@ -7,6 +7,7 @@ import {
 import init, { add_breakpoint, set_system_font_path, set_pfr_font_enabled } from "vm-rust";
 import * as wasm from "vm-rust";
 import { initVmCallbacks } from "../vm/callbacks";
+import { isUIShown } from "../utils/debug";
 import {
   JsBridgeBreakpoint,
   getXtraHostBase,
@@ -67,6 +68,12 @@ function ensureVmGlobalInit(wasmUrl?: string, systemFontPath?: string): Promise<
       await init({});
     }
     console.log("VM initialized");
+    // Without the debugger UI nothing can resume an error breakpoint, so the first Lingo
+    // script error froze the movie for good (Habbo: a room whose furni raised one never
+    // finished loading). Like Shockwave, report the error and carry on.
+    if (!isUIShown()) {
+      wasm.set_break_on_error(false);
+    }
     // Hand the wasm module to the xtra bridge. The bridge's lazy
     // `require('vm-rust')` fallback only works under bundlers that emit
     // CommonJS interop at runtime (CRA's webpack does); the polyfill IIFE

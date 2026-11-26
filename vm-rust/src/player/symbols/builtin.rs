@@ -93,6 +93,7 @@ define_builtin_symbols! {
     "trace" => Trace,
     "frontWindow" => FrontWindow,
     "windowList" => WindowList,
+    "displayTemplate" => DisplayTemplate,
     "freeBytes" => FreeBytes,
     "freeBlock" => FreeBlock,
     "emulateMultibuttonMouse" => EmulateMultibuttonMouse,

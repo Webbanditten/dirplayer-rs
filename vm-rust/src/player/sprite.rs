@@ -161,6 +161,12 @@ pub struct Sprite {
     pub has_back_color: bool,
     pub has_visible_mod: bool,
     pub has_blend_mod: bool,
+    /// rotation / skew were set from Lingo; kept across a member swap (see
+    /// reset_for_member_change).
+    pub has_rotation_mod: bool,
+    pub has_skew_mod: bool,
+    /// A script set flipH/flipV: they survive a member swap, like rotation and skew (reset_for_member_change).
+    pub has_flip_mod: bool,
     pub has_size_tweened: bool,
     pub has_size_changed: bool,
     pub bitmap_size_owned_by_sprite: bool,
@@ -294,6 +300,9 @@ impl Sprite {
             has_back_color: false,
             has_visible_mod: false,
             has_blend_mod: false,
+            has_rotation_mod: false,
+            has_skew_mod: false,
+            has_flip_mod: false,
             has_size_tweened: false,
             has_size_changed: false,
             bitmap_size_owned_by_sprite: false,
@@ -316,10 +325,23 @@ impl Sprite {
     }
 
     pub fn reset_for_member_change(&mut self) {
-        self.skew = 0.0;
-        self.flip_h = false;
-        self.flip_v = false;
-        self.rotation = 0.0;
+        // Rotation and skew a SCRIPT set survive the swap, as in Director (a puppet's
+        // properties persist until script changes them). Habbo mirrors furni facing
+        // directions 4/6 with `rotation = 180` + `skew = 180`, and animates some
+        // (minibars, fridges: `sprite.member = <open frame>`); resetting them here
+        // flipped the furni to the other side mid-animation.
+        if !self.has_skew_mod {
+            self.skew = 0.0;
+        }
+        // Flips a script set survive too: the Lido's diving tower jumper ("Jumping Pelle Class") sets flipH = 1 and
+        // then assigns its member, and stood facing away from the board.
+        if !self.has_flip_mod {
+            self.flip_h = false;
+            self.flip_v = false;
+        }
+        if !self.has_rotation_mod {
+            self.rotation = 0.0;
+        }
         // Colours are NOT reset here. Director keeps a sprite's foreColor and
         // backColor across a member swap — "if a sprite channel is not a
         // puppet, any changes that script makes to a sprite last for the life
@@ -380,6 +402,9 @@ impl Sprite {
         self.has_fore_color = false;
         self.has_back_color = false;
         self.has_visible_mod = false;
+        self.has_rotation_mod = false;
+        self.has_skew_mod = false;
+        self.has_flip_mod = false;
         self.has_size_tweened = false;
         self.has_size_changed = false;
         self.bitmap_size_owned_by_sprite = false;

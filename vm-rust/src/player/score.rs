@@ -160,6 +160,10 @@ pub struct Score {
     pub sorted_channels_cache: RefCell<Option<(u32, u64, Vec<usize>)>>,
     /// Incremented when runtime sprite state changes in a way that affects render inclusion/order.
     pub render_channel_cache_generation: u64,
+    /// Habbo fork: the room's draw order from `habbo_depth::refresh` (channel -> sort key), when switched on.
+    pub habbo_depth: RefCell<Option<std::rc::Rc<HashMap<usize, i64>>>>,
+    /// Bumped whenever `habbo_depth` changes, so the sorted-channel cache is rebuilt.
+    pub habbo_depth_version: std::cell::Cell<u64>,
 }
 
 fn get_sprite_rect(player: &DirPlayer, sprite_id: i16) -> IntRectTuple {
@@ -217,6 +221,51 @@ pub fn get_sprite_rect_in_context(player: &DirPlayer, sprite_id: i16) -> IntRect
     };
     let rect = get_concrete_sprite_rect(player, sprite);
     return (rect.left, rect.top, rect.right, rect.bottom);
+}
+
+/// The rect Lingo sees for `sprite.rect` / `left` / `top` / `right` / `bottom`:
+/// for a rotated or skew-flipped sprite, the bounding box of the drawn quad, as
+/// Director reports it. `get_concrete_sprite_rect` stays untransformed because the
+/// hit test maps the pointer back into it. Habbo mirrors furni with rotation 180 +
+/// skew 180 and validates clicks with `member.image.getPixel(mouse - sprite.left)`;
+/// with the untransformed left the lookup fell outside the image and every click on
+/// a mirrored public-room seat (Udsigten Cafe's sofas) was dropped.
+pub fn get_sprite_bounds_in_context(player: &DirPlayer, sprite_id: i16) -> IntRectTuple {
+    let rect = get_sprite_rect_in_context(player, sprite_id);
+    let Some(sprite) = get_sprite_in_context(player, sprite_id) else {
+        return rect;
+    };
+    let has_rotation = sprite.rotation.abs() > 0.1;
+    let has_skew_flip = sprite.has_skew_flip();
+    if !has_rotation && !has_skew_flip {
+        return rect;
+    }
+    // Forward transform around the loc: skew flip (mirror y), then rotate; the
+    // inverse of what `concrete_sprite_hit_test` applies to the pointer.
+    let (cx, cy) = (sprite.loc_h as f64, sprite.loc_v as f64);
+    let theta = sprite.rotation * std::f64::consts::PI / 180.0;
+    let (sin_t, cos_t) = theta.sin_cos();
+    let corners = [
+        (rect.0 as f64, rect.1 as f64),
+        (rect.2 as f64, rect.1 as f64),
+        (rect.0 as f64, rect.3 as f64),
+        (rect.2 as f64, rect.3 as f64),
+    ];
+    let (mut l, mut t, mut r, mut b) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (x, y) in corners {
+        let dx = x - cx;
+        let mut dy = y - cy;
+        if has_skew_flip {
+            dy = -dy;
+        }
+        let px = cx + dx * cos_t - dy * sin_t;
+        let py = cy + dx * sin_t + dy * cos_t;
+        l = l.min(px);
+        t = t.min(py);
+        r = r.max(px);
+        b = b.max(py);
+    }
+    (l.round() as i32, t.round() as i32, r.round() as i32, b.round() as i32)
 }
 
 pub fn get_channel_number_from_index(index: u32) -> u32 {
@@ -286,6 +335,8 @@ impl Score {
             active_channels_cache: RefCell::new(HashMap::new()),
             sorted_channels_cache: RefCell::new(None),
             render_channel_cache_generation: 0,
+            habbo_depth: RefCell::new(None),
+            habbo_depth_version: std::cell::Cell::new(0),
         }
     }
 
@@ -3484,7 +3535,7 @@ impl Score {
     }
 
     pub fn get_sorted_channels(&self, frame_num: u32) -> Vec<&SpriteChannel> {
-        let generation = self.render_channel_cache_generation;
+        let generation = self.render_channel_cache_generation ^ self.habbo_depth_version.get().rotate_left(32);
         if let Some((cached_frame, cached_generation, cached_indices)) =
             self.sorted_channels_cache.borrow().as_ref()
         {
@@ -3516,10 +3567,16 @@ impl Score {
             })
         });
 
+        let habbo_depth = self.habbo_depth.borrow().clone();
         channel_indices.sort_by(|a, b| {
             let a_channel = &self.channels[*a];
             let b_channel = &self.channels[*b];
-            let res = a_channel.sprite.loc_z.cmp(&b_channel.sprite.loc_z);
+            let res = match &habbo_depth {
+                // Habbo fork: the room's order from the furni footprints (habbo_depth.rs).
+                Some(keys) => crate::player::habbo_depth::key(keys, a_channel.number, a_channel.sprite.loc_z)
+                    .cmp(&crate::player::habbo_depth::key(keys, b_channel.number, b_channel.sprite.loc_z)),
+                None => a_channel.sprite.loc_z.cmp(&b_channel.sprite.loc_z),
+            };
             if res == std::cmp::Ordering::Equal {
                 a_channel.number.cmp(&b_channel.number)
             } else {
@@ -3699,23 +3756,23 @@ pub fn sprite_get_prop(
         Some(BuiltInSymbol::Blend) => Ok(Datum::Int(sprite.map_or(0, |sprite| sprite.blend) as i32)),
         Some(BuiltInSymbol::Ink) => Ok(Datum::Int(sprite.map_or(0, |sprite| sprite.ink) as i32)),
         Some(BuiltInSymbol::Left) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.0 as i32))
         }
         Some(BuiltInSymbol::Top) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.1 as i32))
         }
         Some(BuiltInSymbol::Right) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.2 as i32))
         }
         Some(BuiltInSymbol::Bottom) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Int(rect.3 as i32))
         }
         Some(BuiltInSymbol::Rect) => {
-            let rect = get_sprite_rect_in_context(player, sprite_id);
+            let rect = get_sprite_bounds_in_context(player, sprite_id);
             Ok(Datum::Rect([rect.0 as f64, rect.1 as f64, rect.2 as f64, rect.3 as f64], 0))
         }
         Some(BuiltInSymbol::Color) => Ok(Datum::ColorRef(
@@ -4235,7 +4292,8 @@ fn sprite_set_prop_is_noop(
                 Ok(sprite.height == height && sprite.has_size_changed)
             }
             Some(BuiltInSymbol::Ink) => Ok(sprite.ink == value.int_value()?),
-            Some(BuiltInSymbol::Blend) => Ok(sprite.blend == value.int_value()?),
+            // Not a plain number (e.g. a list): not "unchanged"; the setter decides.
+            Some(BuiltInSymbol::Blend) => Ok(value.int_value().map_or(false, |v| sprite.blend == v)),
             Some(BuiltInSymbol::Rotation) => {
                 let rotation = if value.is_number() {
                     value.to_float()?
@@ -4693,7 +4751,16 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
         ),
         Some(BuiltInSymbol::Blend) => borrow_sprite_mut(
             sprite_id,
-            |player| value.int_value(),
+            // A list sets the blend to its first number (an empty list to 0). Habbo's
+            // sf_wall2.props has `#blend: [0]`; Shockwave takes it, and the "list to int"
+            // error here aborted the furni (and froze the room "Lager").
+            |player| match value {
+                Datum::List(_, items, _) => items
+                    .front()
+                    .map(|item| player.get_datum(item).int_value())
+                    .unwrap_or(Ok(0)),
+                _ => value.int_value(),
+            },
             |sprite, value| {
                 sprite.blend = value?;
                 sprite.has_blend_mod = true;
@@ -4709,6 +4776,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.rotation = 0.0;
                 }
+                sprite.has_rotation_mod = sprite.rotation != 0.0;
                 Ok(())
             },
         ),
@@ -4721,6 +4789,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.skew = 0.0;
                 }
+                sprite.has_skew_mod = sprite.skew != 0.0;
                 Ok(())
             },
         ),
@@ -4733,6 +4802,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.flip_h = false;
                 }
+                sprite.has_flip_mod = sprite.flip_h || sprite.flip_v;
                 Ok(())
             },
         ),
@@ -4745,6 +4815,7 @@ pub fn sprite_set_prop(sprite_id: i16, prop_name: Symbol, value: Datum) -> Resul
                 } else {
                     sprite.flip_v = false;
                 }
+                sprite.has_flip_mod = sprite.flip_h || sprite.flip_v;
                 Ok(())
             },
         ),
@@ -5436,9 +5507,11 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
         let center_x = sprite.loc_h as f64;
         let center_y = sprite.loc_v as f64;
 
-        // Translate to registration point
-        let dx = x as f64 - center_x;
-        let dy = y as f64 - center_y;
+        // Translate to registration point. The mouse point is a pixel: take its centre, so that a mirrored sprite
+        // (rotation 180 + skew 180, Habbo's furni in directions 4 and 6) is tested against the pixel that is drawn
+        // there. From the pixel's corner the picture was read one pixel to the side of the drawn one.
+        let dx = x as f64 + 0.5 - center_x;
+        let dy = y as f64 + 0.5 - center_y;
 
         // Apply inverse rotation (negate the angle)
         let theta = -sprite.rotation * std::f64::consts::PI / 180.0;
@@ -5454,12 +5527,16 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
         }
 
         // Translate back
-        let transformed_x = (rx + center_x) as i32;
-        let transformed_y = (ry + center_y) as i32;
+        let transformed_x = (rx + center_x).floor() as i32;
+        let transformed_y = (ry + center_y).floor() as i32;
 
         if transformed_x >= rect.left && transformed_x < rect.right
             && transformed_y >= rect.top && transformed_y < rect.bottom
         {
+            // Habbo fork: a room furni's sprite isn't under the mouse where its picture shows nothing.
+            if crate::player::habbo_hit::see_through(player, sprite, &rect, transformed_x, transformed_y) {
+                return false;
+            }
             return matte_pixel_hit_test(player, sprite, &rect, transformed_x, transformed_y);
         }
         return false;
@@ -5470,6 +5547,9 @@ pub fn concrete_sprite_hit_test(player: &DirPlayer, sprite: &Sprite, x: i32, y: 
     let right = rect.right;
     let bottom = rect.bottom;
     if x >= left && x < right && y >= top && y < bottom {
+        if crate::player::habbo_hit::see_through(player, sprite, &rect, x, y) {
+            return false;
+        }
         return matte_pixel_hit_test(player, sprite, &rect, x, y);
     }
     false

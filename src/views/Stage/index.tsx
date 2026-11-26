@@ -30,6 +30,8 @@ import {
   ime_composition_update,
   ime_composition_end,
   set_renderer_backend,
+  sync_modifier_keys,
+  release_all_keys,
 } from "vm-rust";
 import { useAppDispatch } from "../../store/hooks";
 import { channelSelected } from "../../store/uiSlice";
@@ -383,13 +385,17 @@ export default function Stage({ showControls, enableGestures }: { showControls?:
         key_up(e.key, e.keyCode);
       }
     };
+    // Keys released while the page has no focus never send keyup.
+    const handleBlur = () => release_all_keys();
     document.addEventListener("mousemove", handleLockedMouseMove);
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
     return () => {
       document.removeEventListener("mousemove", handleLockedMouseMove);
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
     };
   }, []);
 
@@ -495,6 +501,9 @@ export default function Stage({ showControls, enableGestures }: { showControls?:
   }
 
   function dispatchVMMouse(name: "move" | "down" | "up", canvasX: number, canvasY: number, e: React.PointerEvent) {
+    // A modifier released while the page had no focus never sends keyup; the
+    // pointer event knows the real state (see KeyboardManager::sync_modifiers).
+    sync_modifier_keys(e.shiftKey, e.ctrlKey, e.metaKey, e.altKey);
     if (pickingMode) {
       if (name === "move") {
         mouse_move(canvasX, canvasY);
