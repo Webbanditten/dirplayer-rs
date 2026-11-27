@@ -45,6 +45,8 @@ Debug switches (env):
 - `SET_TEXTS=<file>`: the same for `external_texts.txt` (e.g. `purse_ad_url=...` to try the purse ad).
 - `LOCAL_ASSETS=<dir>`: serve a file from that folder instead of prod when its name matches the requested asset (try a
   rebuilt cast, e.g. `hh_room_private_wc.cct`, before uploading it).
+  A variables file found there (`external_variables.txt`, or a wrapper's name such as `external_vars_v31.php`, with
+  what the PHP would output) gets the same URL rewriting, `DROP_VARS` and `SET_VARS` as one from prod.
 
 ## Room photographer
 
