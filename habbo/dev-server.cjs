@@ -91,43 +91,16 @@ function page(sso, forward, large, depth) {
 </body></html>`;
 }
 
-// The client's variables, with every asset URL pointed at this proxy, DROP_VARS removed and SET_VARS applied.
-function sendVars(res, target, body) {
-  // Point every asset URL at this proxy so downloads stay same-origin.
-  const rewritten = body.replace(/https?:\/\/images\.habbo-danmark\.com\//g, `http://127.0.0.1:${PORT}/assets/`);
-  // DROP_VARS=cast.entry.27,... removes variables (for experiments, e.g. freeing a cast slot).
-  const drop = (process.env.DROP_VARS || '').split(',').filter(Boolean);
-  let lines = rewritten.split(/\r?\n/).filter(l => !drop.some(d => l.startsWith(d + '=')));
-  // SET_VARS=<file>: `key=value` lines that replace the variable, or are appended when it is missing
-  // (to try an external_vars.php change before making it on prod).
-  const set = process.env.SET_VARS ? fs.readFileSync(process.env.SET_VARS, 'latin1').split(/\r?\n/).filter(l => l.includes('=') && !l.startsWith('#')) : [];
-  for (const s of set) {
-    const key = s.slice(0, s.indexOf('=') + 1);
-    const i = lines.findIndex(l => l.startsWith(key));
-    if (i >= 0) lines[i] = s; else lines.push(s);
-  }
-  res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
-  res.end(Buffer.from(lines.join('\n'), 'latin1'));
-  log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten${drop.length ? ', dropped ' + drop.join(',') : ''}${set.length ? ', set ' + set.map(s => s.split('=')[0]).join(',') : ''})`);
-}
-
 function proxyAsset(req, res, assetPath) {
-  // external_variables.txt, or a variables wrapper such as external_vars_v31.php (the v31 catalogue's): rewritten below
-  const isVars = /^\/gamedata\/external_(variables\.txt|vars[\w-]*\.php)(\?|$)/.test(assetPath);
+  const isVars = /^\/gamedata\/external_variables\.txt(\?|$)/.test(assetPath);
   // SET_TEXTS=<file>: like SET_VARS below, for the external texts.
   const isTexts = !!process.env.SET_TEXTS && /^\/gamedata\/external_texts\.txt(\?|$)/.test(assetPath);
-  const isMainVars = /^\/gamedata\/external_variables\.txt(\?|$)/.test(assetPath);
-  const target = new URL(ASSETS + (isMainVars && VARS_UPSTREAM ? VARS_UPSTREAM : assetPath));
+  const target = new URL(ASSETS + (isVars && VARS_UPSTREAM ? VARS_UPSTREAM : assetPath));
   // LOCAL_ASSETS=<dir>: serve a file from that folder instead when its name matches the requested one
   // (try a rebuilt cast before uploading it).
   if (process.env.LOCAL_ASSETS) {
     const local = path.join(process.env.LOCAL_ASSETS, path.basename(target.pathname));
     if (path.basename(target.pathname) && fs.existsSync(local) && fs.statSync(local).isFile()) {
-      if (isVars) {
-        // a variables file kept locally (e.g. what a .php wrapper would output) gets the same rewriting as upstream's
-        log('local', target.pathname);
-        return sendVars(res, target, fs.readFileSync(local, 'latin1'));
-      }
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
       log('local', target.pathname);
       return fs.createReadStream(local).pipe(res);
@@ -156,7 +129,24 @@ function proxyAsset(req, res, assetPath) {
       let body = '';
       up.setEncoding('latin1');
       up.on('data', c => (body += c));
-      up.on('end', () => sendVars(res, target, body));
+      up.on('end', () => {
+        // Point every asset URL at this proxy so downloads stay same-origin.
+        const rewritten = body.replace(/https?:\/\/images\.habbo-danmark\.com\//g, `http://127.0.0.1:${PORT}/assets/`);
+        // DROP_VARS=cast.entry.27,... removes variables (for experiments, e.g. freeing a cast slot).
+        const drop = (process.env.DROP_VARS || '').split(',').filter(Boolean);
+        let lines = rewritten.split(/\r?\n/).filter(l => !drop.some(d => l.startsWith(d + '=')));
+        // SET_VARS=<file>: `key=value` lines that replace the variable, or are appended when it is missing
+        // (to try an external_vars.php change before making it on prod).
+        const set = process.env.SET_VARS ? fs.readFileSync(process.env.SET_VARS, 'latin1').split(/\r?\n/).filter(l => l.includes('=') && !l.startsWith('#')) : [];
+        for (const s of set) {
+          const key = s.slice(0, s.indexOf('=') + 1);
+          const i = lines.findIndex(l => l.startsWith(key));
+          if (i >= 0) lines[i] = s; else lines.push(s);
+        }
+        res.writeHead(200, { 'content-type': 'text/plain; charset=iso-8859-1', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+        res.end(Buffer.from(lines.join('\n'), 'latin1'));
+        log('vars', target.pathname, `(${(body.match(/images\.habbo-danmark\.com/g) || []).length} URLs rewritten${drop.length ? ', dropped ' + drop.join(',') : ''}${set.length ? ', set ' + set.map(s => s.split('=')[0]).join(',') : ''})`);
+      });
       return;
     }
     // CORS so other local pages (the CMS web client on localhost:5080) can use this as their asset proxy too.
