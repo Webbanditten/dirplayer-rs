@@ -1,0 +1,496 @@
+/**
+ * Flash furni (`<sprite>.swf`, the 2010-era Flash client's furni libraries) to a Shockwave furni cast.
+ *
+ * A Flash furni SWF holds XML (`<sprite>_assets`, `_logic`, `_visualization`, `_index`) and one bitmap per picture,
+ * exported as `<sprite>_<asset name>`. The mapping to the Shockwave client's conventions (the same ones the hotel's
+ * Sulake casts follow; cf. Quackster's Elias, which does this conversion with JPEXS, swfmill and a Director projector):
+ *
+ * - Floor layer `<sprite>_64_<layer>_<dir>_<frame>` -> `<sprite>_<layer>_0_<x>_<y>_<dir>_<frame>` (x, y = logic.xml
+ *   dimensions), registration point (asset x - 32, asset y); the 32 px size -> `s_<sprite>_...`, (x - 16, y).
+ * - Shadow `<sprite>_64_sd_<dir>_0` -> `<sprite>_sd_<dir>`; icon `<sprite>_icon_a` -> `<sprite>_small` (further icon
+ *   layers `_small_<letter>`).
+ * - An asset with `source` reuses that picture: with the source's offsets it becomes a memberalias.index line
+ *   (`name=source`, `*` when flipH: the client mirrors around the registration point and moves the sprite one tile),
+ *   with other offsets a member of its own (mirrored copy, registration x = width - x - 32).
+ * - visualization.xml (size 64): layer `z` -> `#zshift: [z]`, per-direction `z` -> an 8-entry `#zshift` (direction d
+ *   and d + 1), `alpha` -> `#blend` (alpha / 255 * 100), ink ADD -> 33 (SUBTRACT 35, LIGHTEN 37, DARKEN 39),
+ *   `ignoreMouse` -> `#transparent: 1`, layers in `<colors>` -> ink 41 (tinted with the part colour like Sulake's casts).
+ * - `<animations>`: animation n = state n + 1; per layer `frames` (the frame sequences), `loop` (loopCount), `delay`
+ *   (frameRepeat), `random`. Layers without one show frame 0.
+ * - `<colors>` -> items_definitions.colour strings ("#RRGGBB" per layer, "#FFFFFF" where a layer has none).
+ * - Every layer and direction gets a frame 0 (a 1x1 placeholder if the Flash file has none), which the client's layer
+ *   detection needs.
+ * - Icons keep the asset's offsets as their registration point (the hotel's `chair_norja_small` 11,7 = Flash 11,7).
+ *
+ * Wall items (a wall-thin logic depth, y < 1, and only directions 2 and 4; or `kind: 'wall'`) follow the client's
+ * "Item Object Extension Class" instead, as the hotel's own wall items do (arabian_swords, exe_map, wallmirror):
+ * `<sprite>_64_<layer>_2_<frame>` -> `leftwall <sprite>_<layer>_<frame>`, direction 4 -> `rightwall ...`, 32 px
+ * `s_leftwall ...`; the registration point is the asset's offset itself; a flipped source becomes
+ * `rightwall x=leftwall x*`; `<sprite>.data` is always written (the class builds the member names from its frame
+ * lists, `frames:[0]` for a still layer); asset.index names Item Object Class and Item Object Extension Class.
+ */
+import { ALIAS_INDEX } from './furni';
+import type { CastDocument, SwfDocument } from '../../../vm-rust/pkg/vm_rust.js';
+
+interface SwfSummary {
+  version: number;
+  binary: { id: number; size: number; names: string[] }[];
+  images: { id: number; width: number; height: number; names: string[] }[];
+  skipped: { tag: number; id: number; reason: string }[];
+}
+
+interface FlashAsset {
+  name: string;
+  source?: string;
+  flipH: boolean;
+  x: number;
+  y: number;
+}
+
+export interface PlannedBitmap {
+  name: string;
+  imageId: number;
+  width: number;
+  height: number;
+  flip: boolean;
+  regX: number;
+  regY: number;
+  /** a 1x1 transparent placeholder */
+  empty?: boolean;
+}
+
+export interface FlashPlan {
+  sprite: string;
+  /** a wall item (leftwall / rightwall members) instead of floor furni */
+  wall: boolean;
+  dims: [number, number];
+  bitmaps: PlannedBitmap[];
+  fields: { name: string; text: string }[];
+  /** part colour variants, items_definitions.colour, by the Flash colour id */
+  colors: { id: number; colour: string }[];
+  warnings: string[];
+}
+
+export interface FlashOptions {
+  /** also convert the 32 px pictures (s_ members) */
+  small: boolean;
+  /** floor furni or a wall item; 'auto' (the default) decides from the logic depth and the directions */
+  kind?: 'auto' | 'floor' | 'wall';
+  /**
+   * Transition animations (ids 100 and up, `transitionTo`): Flash plays one once on the way into a state (a countdown
+   * before the fireworks). The 2007 client's furni classes animate a state with one frame list per layer, once or
+   * looped, and never go on to another state by themselves. So a transition is left out ('skip', the default), or
+   * becomes a state of its own in front of the state it leads to ('states': a click steps off, countdown, on), or
+   * goes in front of that state's own frames in one list ('joined': on is countdown then fireworks, and when the state
+   * loops the countdown comes round again, the way the hotel's neon signs run a long pattern in one state).
+   */
+  transitions?: 'skip' | 'states' | 'joined';
+}
+
+/** Whether a Flash furni is a wall item: wall-thin (logic depth y < 1) and drawn only for directions 2 and 4 (left and
+ *  right wall). Checked on prod's 2,656 Flash furni: 113 of the hotel's 120 wall items, none of its 801 floor furni (the
+ *  7 missed are 1 deep: import those with kind 'wall'). */
+export function looksLikeWallItem(dims: [number, number], directions: number[]): boolean {
+  return dims[1] < 1 && directions.length > 0 && directions.every((d) => d === 2 || d === 4);
+}
+
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+const INKS: Record<string, number> = { ADD: 33, SUBTRACT: 35, LIGHTEN: 37, DARKEN: 39, COPY: 0 };
+
+function xml(text: string | undefined): Document | null {
+  if (!text) return null;
+  const doc = new DOMParser().parseFromString(text.replace(/^\s+/, ''), 'text/xml');
+  return doc.querySelector('parsererror') ? null : doc;
+}
+
+const num = (el: Element | null | undefined, attr: string) => {
+  const v = el?.getAttribute(attr);
+  return v === null || v === undefined || v === '' ? undefined : Number(v);
+};
+
+/** Read the SWF's XML and work out every member and text of the Shockwave cast. */
+export function planFlash(swf: SwfDocument, fileName: string, options: FlashOptions): FlashPlan {
+  const summary: SwfSummary = JSON.parse(swf.summaryJson());
+  const warnings: string[] = summary.skipped.map((s) => `Picture ${s.id} not read: ${s.reason}`);
+  const byKind = (kind: string) => {
+    const b = summary.binary.find((x) => x.names.some((n) => n.endsWith('_' + kind)));
+    return b ? xml(swf.binaryText(b.id) ?? undefined) : null;
+  };
+  const assetsXml = byKind('assets');
+  const logicXml = byKind('logic');
+  const visXml = byKind('visualization');
+  const indexXml = byKind('index');
+  if (!assetsXml || !visXml) throw new Error('No assets or visualization XML: not a Habbo Flash furni file');
+
+  const sprite =
+    indexXml?.querySelector('object')?.getAttribute('type') ??
+    logicXml?.querySelector('objectData')?.getAttribute('type') ??
+    visXml.querySelector('visualizationData')?.getAttribute('type') ??
+    fileName.replace(/\.swf$/i, '');
+  const dimsEl = logicXml?.querySelector('model > dimensions');
+  const dims: [number, number] = [num(dimsEl, 'x') ?? 1, num(dimsEl, 'y') ?? 1];
+  const vis64 = visXml.querySelector('visualization[size="64"]');
+  const visDirections = vis64 ? [...new Set(Array.from(vis64.querySelectorAll('directions > direction')).map((d) => num(d, 'id') ?? -1))] : [];
+  const wall = options.kind === 'wall' || (options.kind !== 'floor' && looksLikeWallItem(dims, visDirections));
+  const wallName = (dir: number) => (dir === 4 ? 'rightwall' : 'leftwall');
+
+  // Pictures by asset name: their exported class is "<library>_<asset name>"; the library is usually the sprite.
+  const images = new Map<string, SwfSummary['images'][number]>();
+  for (const img of summary.images) {
+    for (const n of img.names) {
+      const i = n.indexOf('_' + sprite + '_');
+      images.set(i >= 0 ? n.slice(i + 1) : n.startsWith(sprite + '_') ? n.slice(sprite.length + 1) : n, img);
+    }
+  }
+
+  const assets = new Map<string, FlashAsset>();
+  for (const el of Array.from(assetsXml.querySelectorAll('asset'))) {
+    const name = el.getAttribute('name');
+    if (!name) continue;
+    assets.set(name, {
+      name,
+      source: el.getAttribute('source') ?? undefined,
+      flipH: el.getAttribute('flipH') === '1',
+      x: num(el, 'x') ?? 0,
+      y: num(el, 'y') ?? 0,
+    });
+  }
+
+  interface Parsed {
+    kind: 'layer' | 'shadow' | 'icon';
+    size: 64 | 32;
+    letter: string;
+    dir: number;
+    frame: number;
+  }
+  const parse = (name: string): Parsed | null => {
+    const icon = new RegExp(`^${escape(sprite)}_icon_([a-z])$`).exec(name);
+    if (icon) return { kind: 'icon', size: 64, letter: icon[1], dir: 0, frame: 0 };
+    const m = new RegExp(`^${escape(sprite)}_(64|32)_([a-z]+)_(\\d+)_(\\d+)$`).exec(name);
+    if (!m) return null;
+    return { kind: m[2] === 'sd' ? 'shadow' : 'layer', size: Number(m[1]) as 64 | 32, letter: m[2], dir: +m[3], frame: +m[4] };
+  };
+  const shockwaveName = (p: Parsed) => {
+    const pre = p.size === 32 ? 's_' : '';
+    if (p.kind === 'icon') return p.letter === 'a' ? `${sprite}_small` : `${sprite}_small_${p.letter}`;
+    if (wall) return p.kind === 'shadow' ? null : `${pre}${wallName(p.dir)} ${sprite}_${p.letter}_${p.frame}`;
+    if (p.kind === 'shadow') return `${pre}${sprite}_sd_${p.dir}`;
+    return `${pre}${sprite}_${p.letter}_0_${dims[0]}_${dims[1]}_${p.dir}_${p.frame}`;
+  };
+  // Floor layers hang from the tile's left corner, half a tile left of the Flash origin; icons and wall items use the
+  // asset's offsets as they are.
+  const centre = (p: Parsed) => (p.kind === 'icon' || wall ? 0 : p.size === 32 ? 16 : 32);
+
+  // The picture an asset shows: its own, or its source's (following source chains). Only the asset's own flipH counts:
+  // a source's flag is about how the source itself is shown.
+  const owner = (a: FlashAsset): { asset: FlashAsset; flip: boolean } | null => {
+    let cur = a;
+    for (let guard = 0; guard < 8; guard++) {
+      if (images.has(cur.name)) return { asset: cur, flip: a.flipH };
+      if (!cur.source) return null;
+      const next = assets.get(cur.source);
+      if (!next) return images.has(cur.source) ? { asset: { name: cur.source, flipH: false, x: a.x, y: a.y }, flip: a.flipH } : null;
+      cur = next;
+    }
+    return null;
+  };
+
+  const bitmaps: PlannedBitmap[] = [];
+  const aliases: string[] = [];
+  const memberNames = new Set<string>();
+  /** members whose pixels are stored mirrored */
+  const storedFlipped = new Set<string>();
+  const wanted = [...assets.values()].filter((a) => {
+    const p = parse(a.name);
+    if (p && wall && p.kind !== 'icon' && p.dir !== 2 && p.dir !== 4) {
+      warnings.push(`${a.name}: a wall item has only directions 2 (left wall) and 4 (right wall)`);
+      return false;
+    }
+    if (p && wall && p.kind === 'shadow') {
+      warnings.push(`${a.name}: wall items have no shadow`);
+      return false;
+    }
+    return p && (p.size === 64 || options.small);
+  });
+  // Pictures first (members), then the assets that reuse them.
+  const ordered = [...wanted.filter((a) => images.has(a.name)), ...wanted.filter((a) => !images.has(a.name))];
+  for (const a of ordered) {
+    const p = parse(a.name)!;
+    const name = shockwaveName(p)!;
+    const own = owner(a);
+    if (!own) {
+      warnings.push(`${a.name}: no picture`);
+      continue;
+    }
+    const img = images.get(own.asset.name)!;
+    const flip = own.flip;
+    const c = centre(p);
+    const srcParsed = parse(own.asset.name);
+    const srcName = srcParsed ? shockwaveName(srcParsed) ?? undefined : undefined;
+    const sameOffsets = own.asset.x === a.x && own.asset.y === a.y;
+    if (own.asset !== a && srcName && memberNames.has(srcName) && sameOffsets && p.kind !== 'icon') {
+      // The alias mirrors relative to the member as stored.
+      const star = flip !== storedFlipped.has(srcName);
+      aliases.push(`${name}=${srcName}${star ? '*' : ''}`);
+      continue;
+    }
+    bitmaps.push({
+      name,
+      imageId: img.id,
+      width: img.width,
+      height: img.height,
+      flip,
+      regX: (flip ? img.width - a.x : a.x) - c,
+      regY: a.y,
+    });
+    memberNames.add(name);
+    if (flip) storedFlipped.add(name);
+  }
+
+  // Every layer and direction needs a frame 0 (Active Object Class takes base layers from frame 0). Wall items don't:
+  // Item Object Extension Class names each member from its .data frame list.
+  const groups = new Map<string, Set<number>>();
+  for (const n of wall ? [] : [...memberNames, ...aliases.map((l) => l.split('=')[0])]) {
+    const m = /^(.*_[a-z]_0_\d+_\d+_\d+)_(\d+)$/.exec(n);
+    if (!m) continue;
+    if (!groups.has(m[1])) groups.set(m[1], new Set());
+    groups.get(m[1])!.add(+m[2]);
+  }
+  for (const [base, frames] of groups) {
+    if (!frames.has(0)) bitmaps.push({ name: `${base}_0`, imageId: -1, width: 1, height: 1, flip: false, regX: 0, regY: 0, empty: true });
+  }
+  // A layer the Flash file has no picture of in one direction isn't drawn there. The client would fall back on the
+  // layer's direction 0 picture instead (xmas11_luxsofa1's layer d in direction 4), so it gets an empty one.
+  const byFurni = new Map<string, Map<string, Set<string>>>(); // "<pre><sprite>|<w>_<l>" -> layer -> its directions
+  for (const base of groups.keys()) {
+    const m = /^(.*)_([a-z])_0_(\d+_\d+)_(\d+)$/.exec(base);
+    if (!m) continue;
+    const key = `${m[1]}|${m[3]}`;
+    if (!byFurni.has(key)) byFurni.set(key, new Map());
+    const letters = byFurni.get(key)!;
+    if (!letters.has(m[2])) letters.set(m[2], new Set());
+    letters.get(m[2])!.add(m[4]);
+  }
+  for (const [key, letters] of byFurni) {
+    const [stem, dims] = key.split('|');
+    const all = new Set([...letters.values()].flatMap((dirs) => [...dirs]));
+    for (const [letter, dirs] of letters) {
+      for (const d of all) {
+        if (!dirs.has(d)) bitmaps.push({ name: `${stem}_${letter}_0_${dims}_${d}_0`, imageId: -1, width: 1, height: 1, flip: false, regX: 0, regY: 0, empty: true });
+      }
+    }
+  }
+
+  const fields: { name: string; text: string }[] = [];
+  const colors: FlashPlan['colors'] = [];
+  for (const size of options.small ? [64, 32] : [64]) {
+    const vis = visXml.querySelector(`visualization[size="${size}"]`);
+    if (!vis) {
+      if (size === 64) warnings.push('No 64 px visualization');
+      continue;
+    }
+    const pre = size === 32 ? 's_' : '';
+    const layerCount = num(vis, 'layerCount') ?? 0;
+    const usedLetters = [...new Set([...memberNames, ...aliases.map((l) => l.split('=')[0])].map((n) => {
+      const m = wall ? new RegExp(`^${pre}(?:left|right)wall ${escape(sprite)}_([a-z])_\\d+$`).exec(n) : new RegExp(`^${pre}${escape(sprite)}_([a-z])_0_`).exec(n);
+      return m?.[1];
+    }).filter((x): x is string => !!x))].sort();
+
+    // Colours: layers that take a part colour, and the variants.
+    const colorLayers = new Set<number>();
+    for (const cl of Array.from(vis.querySelectorAll('colors > color > colorLayer'))) colorLayers.add(num(cl, 'id') ?? -1);
+    if (size === 64) {
+      for (const col of Array.from(vis.querySelectorAll('colors > color'))) {
+        const parts: string[] = [];
+        for (let i = 0; i < Math.max(layerCount, ...[...colorLayers].map((x) => x + 1)); i++) {
+          const cl = col.querySelector(`colorLayer[id="${i}"]`);
+          parts.push('#' + (cl?.getAttribute('color') ?? 'FFFFFF').toUpperCase());
+        }
+        colors.push({ id: num(col, 'id') ?? 0, colour: parts.join(',') });
+      }
+      colors.sort((a, b) => a.id - b.id);
+    }
+
+    // .props
+    const props: string[] = [];
+    for (const letter of usedLetters) {
+      const id = LETTERS.indexOf(letter);
+      const layer = vis.querySelector(`layers > layer[id="${id}"]`);
+      const entries: string[] = [];
+      const ink = layer?.getAttribute('ink')?.toUpperCase();
+      if (ink && INKS[ink] !== undefined) entries.push(`#ink: ${INKS[ink]}`);
+      else if (ink) warnings.push(`Layer ${letter}: ink ${ink} has no Shockwave equivalent`);
+      else if (colorLayers.has(id)) entries.push('#ink: 41');
+      const alpha = num(layer, 'alpha');
+      if (alpha !== undefined && !ink) entries.push(`#blend: ${Math.round((alpha / 255) * 100)}`);
+      const perDir = Array.from(vis.querySelectorAll(`directions > direction > layer[id="${id}"]`));
+      if (wall) {
+        // one locZ for both walls (Item Object Extension Class takes the first entry): direction 2's, else the layer's
+        const z = num(vis.querySelector(`directions > direction[id="2"] > layer[id="${id}"]`), 'z') ?? num(layer, 'z');
+        if (z !== undefined) entries.push(`#zshift: [${z}]`);
+      } else if (perDir.length) {
+        const z = [0, 0, 0, 0, 0, 0, 0, 0];
+        for (const dl of perDir) {
+          const d = num(dl.parentElement, 'id') ?? 0;
+          const v = num(dl, 'z') ?? 0;
+          if (d >= 0 && d < 8) z[d] = v;
+          if (d + 1 < 8) z[d + 1] = v;
+        }
+        entries.push(`#zshift: [${z.join(', ')}]`);
+      } else if (num(layer, 'z') !== undefined) {
+        entries.push(`#zshift: [${num(layer, 'z')}]`);
+      }
+      if (layer?.getAttribute('ignoreMouse') === '1') entries.push('#transparent: 1');
+      props.push(`"${letter}": [${entries.length ? entries.join(', ') : ':'}]`);
+    }
+    fields.push({ name: `${pre}${sprite}.props`, text: `[${props.join(', ')}]` });
+
+    // .data
+    const allAnims = Array.from(vis.querySelectorAll('animations > animation')).map((a) => ({ el: a, id: num(a, 'id') ?? 0, to: num(a, 'transitionTo') }));
+    const anims = allAnims.filter((a) => a.id < 100);
+    const transitions = allAnims.filter((a) => a.id >= 100);
+    const asStates = options.transitions === 'states';
+    const joined = options.transitions === 'joined';
+    for (const t of transitions) {
+      warnings.push(t.to === undefined || (!asStates && !joined)
+        ? `Animation ${t.id} (a transition) left out (Settings can bring transitions in: as states of their own, or in front of the state they lead to)`
+        : asStates
+          ? `Animation ${t.id} (the transition to state ${t.to + 1}) is a state of its own, in front of it`
+          : `Animation ${t.id} (the transition to state ${t.to + 1}) plays in front of that state's own frames, in one list`);
+    }
+    if (anims.length || (wall && usedLetters.length)) {
+      const count = anims.length ? Math.max(...anims.map((a) => a.id)) + 1 : 1;
+      // The states in the order a click steps through them: each one after the transitions that lead into it, the
+      // ones back to the first state last.
+      const order: (Element | undefined)[] = [];
+      const into = (s: number) => transitions.filter((t) => t.to === s).map((t) => t.el);
+      for (let s = 0; s < count; s++) {
+        if (s > 0 && asStates) order.push(...into(s));
+        order.push(anims.find((a) => a.id === s)?.el);
+      }
+      if (asStates) order.push(...into(0));
+      const states = order.length;
+      /** A layer's frames in an animation, each as often as it is shown (frameRepeat), and how it runs. */
+      const layerOf = (anim: Element | undefined, id: number) => {
+        const al = anim?.querySelector(`animationLayer[id="${id}"]`);
+        const seqs = al ? Array.from(al.querySelectorAll('frameSequence')) : [];
+        const frames = seqs.flatMap((seq) => Array.from(seq.querySelectorAll('frame')).map((f) => num(f, 'id') ?? 0));
+        return { frames, loop: num(al, 'loopCount'), delay: Math.max(1, num(al, 'frameRepeat') ?? 1), random: seqs.some((seq) => seq.getAttribute('random') === '1') };
+      };
+      const ticks = (l: { frames: number[]; delay: number }) => l.frames.flatMap((f) => Array.from({ length: l.delay }, () => f));
+      const lines: string[] = [];
+      for (const letter of usedLetters) {
+        const id = LETTERS.indexOf(letter);
+        const perState: string[] = [];
+        for (let s = 0; s < states; s++) {
+          const own = layerOf(order[s], id);
+          let { frames, delay } = own;
+          const lead = joined && !own.random ? into(anims.findIndex((a) => a.el === order[s]) >= 0 ? anims.find((a) => a.el === order[s])!.id : -1) : [];
+          if (lead.length) {
+            // Every layer's lead-in is as long as the longest one, so the layers stay in step when the list loops.
+            const before: number[] = [];
+            for (const t of lead) {
+              const length = Math.max(...usedLetters.map((l) => ticks(layerOf(t, LETTERS.indexOf(l))).length), 1);
+              const mine = ticks(layerOf(t, id));
+              const pad = mine.length ? mine[mine.length - 1] : 0;
+              before.push(...mine, ...Array.from({ length: length - mine.length }, () => pad));
+            }
+            const after = ticks({ frames: frames.length ? frames : [0], delay });
+            // a layer that shows one frame all the way through stays one frame
+            if (new Set([...before, ...after]).size > 1) {
+              frames = [...before, ...after];
+              delay = 1;
+            }
+          }
+          const parts: string[] = [];
+          if (own.loop !== undefined) parts.push(`loop:${own.loop}`);
+          if (delay > 1) parts.push(`delay:${delay}`);
+          if (own.random) parts.push('random:1');
+          parts.push(`frames:[ ${(frames.length ? frames : [0]).join(',')} ]`);
+          perState.push(`[ ${parts.join(', ')} ]`);
+        }
+        lines.push(`${letter}:[ ${perState.join(', ')} ]`);
+      }
+      const stateList = Array.from({ length: states }, (_, i) => i + 1).join(',');
+      fields.push({ name: `${pre}${sprite}.data`, text: `[\nstates:[${stateList}],\nlayers:[ \n${lines.join(',\n')}\n]\n]` });
+    }
+  }
+
+  const classes = wall ? '"Item Object Class", "Item Object Extension Class"' : '"Active Object Class",  "Active Object Extension Class"';
+  fields.push({ name: 'asset.index', text: `[#id: "${sprite}", #classes: [${classes}]]` });
+  if (aliases.length) fields.push({ name: 'memberalias.index', text: aliases.join('\n') });
+  return { sprite, wall, dims, bitmaps, fields, colors, warnings };
+}
+
+function escape(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mirrored(rgba: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(rgba.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out.set(rgba.subarray((y * w + x) * 4, (y * w + x) * 4 + 4), (y * w + (w - 1 - x)) * 4);
+  return out;
+}
+
+/**
+ * Build the cast: `template` is any furni cast (a Director-written one, so the result has its container and chunk
+ * layout); its members are replaced by the plan's. Pictures are stored 32-bit with their alpha.
+ */
+export function buildCast(doc: CastDocument, swf: SwfDocument, plan: FlashPlan) {
+  const members: { slot: number; type: string; bitmap?: { width: number } }[] = JSON.parse(doc.membersJson());
+  const bitmapTpl = members.find((m) => m.type === 'bitmap' && (m.bitmap?.width ?? 0) > 1) ?? members.find((m) => m.type === 'bitmap');
+  const fieldTpl = members.find((m) => m.type === 'field');
+  if (!bitmapTpl || !fieldTpl) throw new Error('The template cast needs a bitmap and a field member');
+  for (const m of members) if (m.slot !== bitmapTpl.slot && m.slot !== fieldTpl.slot) doc.delete(m.slot);
+
+  const pixels = (b: PlannedBitmap) => {
+    if (b.empty) return new Uint8Array(4);
+    const raw = swf.imageRgba(b.imageId);
+    return b.flip ? mirrored(raw, b.width, b.height) : raw;
+  };
+  plan.bitmaps.forEach((b, i) => {
+    if (i === 0) {
+      doc.setName(bitmapTpl.slot, b.name);
+      doc.setBitmap(bitmapTpl.slot, pixels(b), b.width, b.height, b.regX, b.regY, 'rgba', 0);
+    } else {
+      doc.addBitmap(bitmapTpl.slot, b.name, pixels(b), b.width, b.height, b.regX, b.regY, 'rgba');
+    }
+  });
+  plan.fields.forEach((f, i) => {
+    if (i === 0) {
+      doc.setName(fieldTpl.slot, f.name);
+      doc.setText(fieldTpl.slot, f.text);
+    } else {
+      doc.addField(fieldTpl.slot, f.name, f.text);
+    }
+  });
+  if (!plan.bitmaps.length) doc.delete(bitmapTpl.slot);
+}
+
+/**
+ * The hotel keeps the 32 px pictures in a cast of their own (hh_furni_xx_s_<sprite>.cct): a plan with both sizes split
+ * into the large plan and the small one (s_ members, s_ fields, the s_ alias lines, plus the icons, which both casts
+ * have). The small cast gets no asset.index, like the hotel's.
+ */
+export function splitPlan(plan: FlashPlan): { large: FlashPlan; small: FlashPlan | null } {
+  const isSmall = (n: string) => /^s_/i.test(n);
+  const isIcon = (n: string) => n.toLowerCase().startsWith(`${plan.sprite.toLowerCase()}_small`);
+  const aliases = (plan.fields.find((f) => f.name === ALIAS_INDEX)?.text ?? '').split('\n').filter((l) => l.trim());
+  const withAliases = (fields: FlashPlan['fields'], lines: string[]) => [
+    ...fields.filter((f) => f.name !== ALIAS_INDEX),
+    ...(lines.length ? [{ name: ALIAS_INDEX, text: lines.join('\n') }] : []),
+  ];
+  const large: FlashPlan = {
+    ...plan,
+    bitmaps: plan.bitmaps.filter((b) => !isSmall(b.name)),
+    fields: withAliases(plan.fields.filter((f) => !isSmall(f.name)), aliases.filter((l) => !isSmall(l))),
+  };
+  const smallBitmaps = plan.bitmaps.filter((b) => isSmall(b.name) || isIcon(b.name));
+  if (!smallBitmaps.some((b) => isSmall(b.name))) return { large, small: null };
+  const small: FlashPlan = {
+    ...plan,
+    bitmaps: smallBitmaps,
+    fields: withAliases(plan.fields.filter((f) => isSmall(f.name)), aliases.filter((l) => isSmall(l))),
+  };
+  return { large, small };
+}
